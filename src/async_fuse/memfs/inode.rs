@@ -1,17 +1,14 @@
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering::{Acquire, Release};
 use clippy_utilities::OverflowArithmetic;
 use tokio::sync::Mutex;
 use crate::async_fuse::fuse::protocol::INum;
 use crate::async_fuse::memfs::{dist, S3MetaData};
 use crate::async_fuse::memfs::dist::etcd;
-use crate::async_fuse::memfs::fs_util::FileAttr;
 use crate::async_fuse::memfs::s3_wrapper::S3BackEnd;
 use crate::common::etcd_delegate::EtcdDelegate;
-// use tokio::sync::RwLock;
 
-pub struct InodeState {
+#[derive(Debug)]
+pub(crate) struct InodeState {
     range_begin_end:Mutex<(INum,INum)>,
     recycle_unused:crossbeam_queue::SegQueue<INum>,
 }
@@ -27,19 +24,23 @@ impl InodeState {
 
 impl InodeState {
     /// just get a unique inum
-    async fn alloc_inum(&self,inodestate:&InodeState, etcd_client:&Arc<EtcdDelegate>) -> INum {
+    async fn alloc_inum(&self, etcd_client:&Arc<EtcdDelegate>) -> INum {
         const INODE_RANGE:u64=10000;
         if let Some(inum)= self.recycle_unused.pop(){
             return inum;
         }
-        let locked=inodestate.range_begin_end.lock().await;
+        let mut locked=self.range_begin_end.lock().await;
         if locked.0==locked.1{
             // need update
-            let ret=etcd::fetch_add_inode_next_range(Arc::clone(etcd_client),INODE_RANGE).await.unwrap_or_else(|e|{
+            let ret=etcd::fetch_add_inode_next_range(
+                // here appeared an await, so we need to use tokio::sync::Mutex
+                Arc::clone(etcd_client),INODE_RANGE).await.unwrap_or_else(|e|{
                 panic!("failed to fetch add inode next range, error is {:?}", e)
             });
+            // begin
             locked.0=ret;
-            locked.0=ret.overflow_add(INODE_RANGE-1);
+            // end
+            locked.1=ret.overflow_add(INODE_RANGE-1);
             ret
         }else {
             let ret=locked.0;
@@ -62,7 +63,7 @@ impl InodeState {
     //  2. communicate and found no inum;  lock;  communicate and found no inum;  alloc ino;  unlock
     //  3. communicate and found no inum;  lock;  communicate and found inum;  unlock;
     //
-    // Solution two: use a global inode number for path, like "inode"+path: inum
+    // (chosen) Solution two: use a global inode number for path, like "inode"+path: inum
     //  cases:
     //  1. communicate with other nodes, and got inum
     //  2. communicate and found no inum;  try write kv when there's none;  write success;
@@ -79,7 +80,7 @@ impl InodeState {
         });
         match fattr {
             None => {
-                let inum=self.inode_alloc_inum().await;
+                let inum=self.alloc_inum(etcd_client).await;
                 // try write kv when there's none
                 // if there's none, write success
                 // if there's some, write failed and get old
@@ -100,15 +101,16 @@ impl InodeState {
                 (attr.ino,false)
             }
         }
+        // TODO key should be removed after a while or file is in cache.
     }
 }
 
 impl<S: S3BackEnd + Send + Sync + 'static> S3MetaData<S> {
 
     #[inline]
-    pub async fn inode_get_inum_by_fullpath(&self,fullpath: &str) -> (INum,bool){
+    pub(crate) async fn inode_get_inum_by_fullpath(&self,fullpath: &str) -> (INum,bool){
         self.inode_state.inode_get_inum_by_fullpath(fullpath,&self.node_id.as_str(),
                                    self.volume_info.as_str(),
-                                   &self.etcd_client).await
+                                   &self.etcd_client).await                                   
     }
 }

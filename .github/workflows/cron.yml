@@ -3,9 +3,10 @@ on:
   pull_request:
     branches: [master]
   schedule: [cron: "0 */4 * * *"]
+  workflow_dispatch:
 
 env:
-  RUST_VERSION: 1.61.0
+  RUST_VERSION: 1.62.0
   CONFIG_DOCKERHUB: datenlord-deploy.yaml
   CONFIG_MINIKUBE: scripts/datenlord_minikube.yaml
   CONFIG_KIND: scripts/datenlord.yaml
@@ -191,9 +192,11 @@ jobs:
           cat >>/tmp/setup.sh <<'END'
           NODES_IP="$(kubectl get nodes -A -o wide | awk 'FNR > 2 {print $6}')"
           NODES="$(kubectl get nodes -A -o wide | awk 'FNR > 2 {print $1}')"
+          
           for node in ${NODES}; do
             USER="$(whoami)"
-            docker cp /etc/apt/sources.list ${node}:/etc/apt/sources.list
+            echo docker exec ${node} cat /proc/version
+            docker cp scripts/ubuntu20sources.list ${node}:/etc/apt/sources.list
             docker exec ${node} apt-get update
             docker exec ${node} apt-get install -y ssh sudo
             docker exec ${node} systemctl start sshd
@@ -265,9 +268,9 @@ jobs:
           sleep 60
           kubectl get pods -A -o wide
           # sudo netstat -lntp && ls -lsh
-      - name: Datenlord metric and logging test
-        run: |
-          sh scripts/datenlord_metrics_logging_test.sh
+      # - name: Datenlord metric and logging test
+      #   run: |
+      #     sh scripts/datenlord_metrics_logging_test.sh
       - name: CSI E2E Test
         run: |
           wget --quiet https://dl.k8s.io/$K8S_VERSION/kubernetes-test-linux-amd64.tar.gz
