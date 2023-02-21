@@ -2,6 +2,7 @@ use super::cache::GlobalCache;
 use super::dir::DirEntry;
 use super::dist::client as dist_client;
 use super::dist::server::CacheServer;
+use super::dist::etcd;
 use super::fs_util::{self, FileAttr};
 use super::metadata::MetaData;
 use super::node::Node;
@@ -26,7 +27,6 @@ use std::path::Path;
 use std::sync::{atomic::AtomicU32, Arc};
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock, RwLockWriteGuard};
-
 use clippy_utilities::{Cast, OverflowArithmetic};
 use crate::async_fuse::memfs::inode::InodeState;
 
@@ -312,7 +312,12 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
         self.sync_dir_remote(&parent_full_path, node_name, &child_attr, target_path)
             .await;
 
-        self.inode_remove_inum_mark_for_path(full_path.as_str());
+        // We dont need to sync for the unmark
+        // todo: use etcd lease for auto expire.
+        let etcd_client=Arc::clone(&self.etcd_client);
+        tokio::spawn(async move{
+            etcd::unmark_fullpath_with_ino_in_etcd(etcd_client,full_path).await;
+        });
         // inode is cached, so we should remove the path mark
 
         let ttl = Duration::new(MY_TTL_SEC, 0);
@@ -459,7 +464,15 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
                 let mut cache = self.cache.write().await;
                 cache.insert(child_ino, child_node);
             }
-            self.inode_remove_inum_mark_for_path(full_path.as_str());
+            {
+                let fullpath=full_path.clone();
+                // We dont need to sync for the unmark
+                // todo: use etcd lease for auto expire.
+                let etcd_client=Arc::clone(&self.etcd_client);
+                tokio::spawn(async move{
+                    etcd::unmark_fullpath_with_ino_in_etcd(etcd_client,fullpath).await;
+                });
+            }
             self.path2inum.write().await.insert(full_path, child_ino);
 
             let fuse_attr = fs_util::convert_to_fuse_attr(attr);
