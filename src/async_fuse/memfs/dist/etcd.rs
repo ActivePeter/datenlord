@@ -381,3 +381,17 @@ pub async fn mark_fullpath_with_ino_in_etcd(etcd_client: &Arc<EtcdDelegate>,full
         Some(oldino) => {Ok(oldino)}
     }
 }
+
+/// Unmark a path with ino in etcd
+/// Only one can mark path successfully
+pub async fn unmark_fullpath_with_ino_in_etcd(etcd_client: &Arc<EtcdDelegate>,fullpath:&str) -> anyhow::Result<INum> {
+    let key=format!("{}{}",ETCD_INODE_MARK_PREFIX,fullpath);
+    match etcd_client.delete_exact_one_value(key.as_str())
+        .await
+        .with_context(|| format!("mark_fullpath_with_ino_in_etcd {}",fullpath))?{
+        None => {
+            Ok(ino)
+        }
+        Some(oldino) => {Ok(oldino)}
+    }
+}

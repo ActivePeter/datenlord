@@ -194,7 +194,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
         target_path: Option<&Path>,
     ) -> anyhow::Result<(Duration, FuseAttr, u64)> {
         // pre-check
-        let (parent_full_path, child_attr, fuse_attr) = {
+        let (parent_full_path, full_path, child_attr, fuse_attr) = {
             let mut cache = self.cache.write().await;
             let parent_node = self
                 .create_node_pre_check(parent, node_name, &mut cache)
@@ -305,12 +305,16 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
                     parent, parent_name
                 )
             });
-            (pnode.full_path().to_owned(), new_node_attr, fuse_attr)
+            (pnode.full_path().to_owned(), full_path, new_node_attr, fuse_attr)
         };
 
         self.sync_attr_remote(&parent_full_path).await;
         self.sync_dir_remote(&parent_full_path, node_name, &child_attr, target_path)
             .await;
+
+        self.inode_remove_inum_mark_for_path(full_path.as_str());
+        // inode is cached, so we should remove the path mark
+
         let ttl = Duration::new(MY_TTL_SEC, 0);
         Ok((ttl, fuse_attr, MY_GENERATION))
     }
@@ -455,7 +459,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
                 let mut cache = self.cache.write().await;
                 cache.insert(child_ino, child_node);
             }
-
+            self.inode_remove_inum_mark_for_path(full_path.as_str());
             self.path2inum.write().await.insert(full_path, child_ino);
 
             let fuse_attr = fs_util::convert_to_fuse_attr(attr);

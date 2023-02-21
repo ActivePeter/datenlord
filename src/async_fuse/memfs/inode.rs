@@ -103,6 +103,11 @@ impl InodeState {
         }
         // TODO key should be removed after a while or file is in cache.
     }
+
+    // call this when file is cached to remove mark in etcd.
+    async fn inode_remove_inum_mark_for_path(&self,fullpath:&str,etcd_client:Arc<EtcdDelegate>){
+        etcd::unmark_fullpath_with_ino_in_etcd(&etcd_client,fullpath);
+    }
 }
 
 impl<S: S3BackEnd + Send + Sync + 'static> S3MetaData<S> {
@@ -112,5 +117,13 @@ impl<S: S3BackEnd + Send + Sync + 'static> S3MetaData<S> {
         self.inode_state.inode_get_inum_by_fullpath(fullpath,&self.node_id.as_str(),
                                    self.volume_info.as_str(),
                                    &self.etcd_client).await                                   
+    }
+    pub(crate) fn inode_remove_inum_mark_for_path(&self,fullpath:&str){
+        // we don't need to wait for the unmark finish
+        // todo: use etcd lease to remove the key automatically
+        let etcdclient=Arc::clone(&self.etcd_client);
+        tokio::spawn(async move {
+            self.inode_state.inode_remove_inum_mark_for_path(fullpath,etcdclient).await;
+        });
     }
 }

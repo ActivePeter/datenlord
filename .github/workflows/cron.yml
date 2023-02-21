@@ -27,9 +27,9 @@ env:
   GRAFANA_LABEL: grafana
   GRAFANA_PORT: 3000
   K8S_CONFIG: k8s.e2e.config
-  K8S_VERSION: v1.21.1
+  K8S_VERSION: v1.21.14
   KIBANA_LABEL: kibana
-  KIND_NODE_VERSION: kindest/node:v1.21.1@sha256:69860bda5563ac81e3c0057d654b5253219618a22ec3a346306239bba8cfa1a6
+  KIND_NODE_VERSION: kindest/node:v1.21.14@sha256:9d9eb5fb26b4fbc0c6d95fa8c790414f9750dd583f5d7cee45d92e8c26670aa1
   KIND_VERSION: v0.11.1
   # MINIKUBE_VERSION: v1.13.0
   NODE_APP_LABEL: csi-nodeplugin-datenlord
@@ -196,7 +196,7 @@ jobs:
           for node in ${NODES}; do
             USER="$(whoami)"
             echo docker exec ${node} cat /proc/version
-            docker cp scripts/ubuntu20sources.list ${node}:/etc/apt/sources.list
+            # docker cp scripts/ubuntu20sources.list ${node}:/etc/apt/sources.list
             docker exec ${node} apt-get update
             docker exec ${node} apt-get install -y ssh sudo
             docker exec ${node} systemctl start sshd
@@ -268,9 +268,9 @@ jobs:
           sleep 60
           kubectl get pods -A -o wide
           # sudo netstat -lntp && ls -lsh
-      # - name: Datenlord metric and logging test
-      #   run: |
-      #     sh scripts/datenlord_metrics_logging_test.sh
+      - name: Datenlord metric and logging test
+        run: |
+          sh scripts/datenlord_metrics_logging_test.sh
       - name: CSI E2E Test
         run: |
           wget --quiet https://dl.k8s.io/$K8S_VERSION/kubernetes-test-linux-amd64.tar.gz
