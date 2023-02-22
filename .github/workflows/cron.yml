@@ -195,7 +195,8 @@ jobs:
           
           for node in ${NODES}; do
             USER="$(whoami)"
-            echo docker exec ${node} cat /proc/version
+            docker exec ${node} cat /proc/version
+            docker exec ${node} rm -rf /usr/sbin/policy-rc.d
             # docker cp scripts/ubuntu20sources.list ${node}:/etc/apt/sources.list
             docker exec ${node} apt-get update
             docker exec ${node} apt-get install -y ssh sudo
