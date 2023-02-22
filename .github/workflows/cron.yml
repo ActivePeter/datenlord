@@ -189,7 +189,7 @@ jobs:
           kind create cluster --config ./kind-config.yaml
       - name: Setup SSH
         run: |
-          cat ${HOME}/.ssh/id_rsa.pub
+          
           echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
           cat >>/tmp/setup.sh <<'END'
           NODES_IP="$(kubectl get nodes -A -o wide | awk 'FNR > 2 {print $6}')"
@@ -222,7 +222,9 @@ jobs:
           END
 
           rm -rf $HOME/.ssh/
-          ssh-keygen -N '' -f ~/.ssh/id_rsa
+          # ssh-keygen -t rsa
+          ssh-keygen -t rsa -N '' -f ~/.ssh/id_rsa
+          cat ${HOME}/.ssh/id_rsa.pub
           /bin/bash /tmp/setup.sh
       - name: Datenlord Monitoring and Alerting Test
         run: |
