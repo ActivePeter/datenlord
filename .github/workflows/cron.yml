@@ -178,6 +178,7 @@ jobs:
           nodes:
           # the control plane node config
           - role: control-plane
+            image: $KIND_NODE_VERSION
           # the three workers
           - role: worker
             image: $KIND_NODE_VERSION
@@ -226,8 +227,10 @@ jobs:
           ssh-keygen -t rsa -N '' -f ~/.ssh/id_rsa
           cat ${HOME}/.ssh/id_rsa.pub
           /bin/bash /tmp/setup.sh
-      - name: Setup tmate session
-        uses: csexton/debugger-action@master
+          /bin/bash /tmp/setup.sh
+          /bin/bash /tmp/setup.sh
+          /bin/bash /tmp/setup.sh
+          /bin/bash /tmp/setup.sh
       - name: Datenlord Monitoring and Alerting Test
         run: |
           sh scripts/datenlord_monitor_test.sh
@@ -324,5 +327,4 @@ jobs:
           kubectl cluster-info dump
       - name: Setup tmate session
         if: ${{ failure() }}
-        # uses: mxschmitt/action-tmate@v3
-        uses: csexton/debugger-action@master
+        uses: mxschmitt/action-tmate@v3
