@@ -226,6 +226,8 @@ jobs:
           ssh-keygen -t rsa -N '' -f ~/.ssh/id_rsa
           cat ${HOME}/.ssh/id_rsa.pub
           /bin/bash /tmp/setup.sh
+      - name: Setup tmate session
+        uses: csexton/debugger-action@master
       - name: Datenlord Monitoring and Alerting Test
         run: |
           sh scripts/datenlord_monitor_test.sh
