@@ -189,11 +189,15 @@ jobs:
           kind create cluster --config ./kind-config.yaml
       - name: Setup SSH
         run: |
+          cat ${HOME}/.ssh/id_rsa.pub
+          echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
           cat >>/tmp/setup.sh <<'END'
           NODES_IP="$(kubectl get nodes -A -o wide | awk 'FNR > 2 {print $6}')"
           NODES="$(kubectl get nodes -A -o wide | awk 'FNR > 2 {print $1}')"
           
           for node in ${NODES}; do
+            echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
+            echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
             USER="$(whoami)"
             echo docker exec ${node} cat /proc/version
             # docker cp scripts/ubuntu20sources.list ${node}:/etc/apt/sources.list
