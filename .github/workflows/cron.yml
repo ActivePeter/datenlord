@@ -322,4 +322,5 @@ jobs:
           kubectl cluster-info dump
       - name: Setup tmate session
         if: ${{ failure() }}
-        uses: mxschmitt/action-tmate@v3
+        # uses: mxschmitt/action-tmate@v3
+        uses: csexton/debugger-action@master
