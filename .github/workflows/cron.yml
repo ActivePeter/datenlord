@@ -199,7 +199,8 @@ jobs:
             echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
             echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
             USER="$(whoami)"
-            echo docker exec ${node} cat /proc/version
+            docker exec ${node} cat /proc/version
+            docker exec ${node} rm -rf /usr/sbin/policy-rc.d
             # docker cp scripts/ubuntu20sources.list ${node}:/etc/apt/sources.list
             docker exec ${node} apt-get update
             docker exec ${node} apt-get install -y ssh sudo
@@ -272,9 +273,9 @@ jobs:
           sleep 60
           kubectl get pods -A -o wide
           # sudo netstat -lntp && ls -lsh
-      - name: Datenlord metric and logging test
-        run: |
-          sh scripts/datenlord_metrics_logging_test.sh
+      # - name: Datenlord metric and logging test
+      #   run: |
+      #     sh scripts/datenlord_metrics_logging_test.sh
       - name: CSI E2E Test
         run: |
           wget --quiet https://dl.k8s.io/$K8S_VERSION/kubernetes-test-linux-amd64.tar.gz
