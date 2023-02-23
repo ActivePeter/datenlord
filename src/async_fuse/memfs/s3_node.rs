@@ -651,7 +651,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
     /// Create symlink in a directory
     async fn create_child_symlink(
         &mut self,
-        inum:INum,
+        inum: INum,
         child_symlink_name: &str,
         target_path: PathBuf,
     ) -> anyhow::Result<Self> {
@@ -723,7 +723,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
     /// Read symlink itself in a directory, not follow symlink
     async fn load_child_symlink(
         &self,
-        inum:INum,
+        inum: INum,
         child_symlink_name: &str,
         remote: Option<FileAttr>,
     ) -> anyhow::Result<Self> {
@@ -834,7 +834,12 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
     }
 
     /// Create sub-directory in a directory
-    async fn create_child_dir(&mut self, inum:INum,child_dir_name: &str, mode: Mode) -> anyhow::Result<Self> {
+    async fn create_child_dir(
+        &mut self,
+        inum: INum,
+        child_dir_name: &str,
+        mode: Mode,
+    ) -> anyhow::Result<Self> {
         let absolute_path = self.absolute_dir_with_child(child_dir_name);
         let dir_data = self.get_dir_data();
         // TODO return error
@@ -886,7 +891,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
     /// Open file in a directory
     async fn open_child_file(
         &self,
-        inum:INum,
+        inum: INum,
         child_file_name: &str,
         remote: Option<FileAttr>,
         _oflags: OFlag,
@@ -940,7 +945,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
     /// Create file in a directory
     async fn create_child_file(
         &mut self,
-        inum:INum,
+        inum: INum,
         child_file_name: &str,
         oflags: OFlag,
         mode: Mode,

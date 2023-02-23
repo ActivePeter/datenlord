@@ -1,6 +1,7 @@
 use super::error::Context;
 use super::error::DatenLordResult;
 use serde::de::DeserializeOwned;
+use std::fmt::Write;
 
 /// Decode from bytes
 #[inline]
@@ -18,6 +19,8 @@ pub fn format_anyhow_error(error: &anyhow::Error) -> String {
         .map(std::string::ToString::to_string)
         .collect::<Vec<_>>();
     let mut err_msg = err_msg_vec.as_slice().join(", caused by: ");
-    err_msg.push_str(&format!(", root cause: {}", error.root_cause()));
+    write!(err_msg, ", root cause: {}", error.root_cause()).unwrap_or_else(|e| {
+        panic!("write str err, {}", e);
+    });
     err_msg
 }

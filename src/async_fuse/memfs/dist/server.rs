@@ -380,7 +380,7 @@ async fn get_inode_num<S: S3BackEnd + Send + Sync + 'static>(
     stream: &mut TcpStream,
     _meta: &Arc<S3MetaData<S>>,
 ) -> anyhow::Result<()> {
-    let inum = 0;//meta.cur_inum();
+    let inum = 0; //meta.cur_inum();
     tcp::write_u32(stream, inum).await?;
     Ok(())
 }

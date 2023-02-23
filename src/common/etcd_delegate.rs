@@ -2,6 +2,7 @@
 
 use super::error::{Context, DatenLordResult};
 use super::util;
+use etcd_client::{TxnCmp, TxnOpResponse};
 use log::debug;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -155,7 +156,6 @@ impl EtcdDelegate {
         }
     }
 
-
     /// if key exist, don't insert, return the old value
     /// if key not exist, insert, return None
     async fn write_to_etcd_if_none<
@@ -181,7 +181,7 @@ impl EtcdDelegate {
             //  https://github.com/etcd-io/etcd/issues/7115
             //  https://github.com/etcd-io/etcd/issues/6740
             //key does not exist when create revision is 0, check the links above
-            .when_create_revision(etcd_client::KeyRange::key(key.clone()), TxnCmp::Equal,0)
+            .when_create_revision(etcd_client::KeyRange::key(key.clone()), TxnCmp::Equal, 0)
             //key does not exist, insert kv
             .and_then(put_request)
             //key exists, return old value
@@ -194,17 +194,25 @@ impl EtcdDelegate {
             )
         })?;
 
-        if txn_res.is_success(){
+        if txn_res.is_success() {
             //key does not exist, insert kv
             Ok(None)
-        }else{
-            let mut resp=txn_res.get_responses();
-            assert_eq!(resp.len(), 1, "txn response length should be 1");
-            match resp.pop().unwrap_or_else(|| {panic!("txn response length should be 1 and pop should not fail")}) {
+        } else {
+            let mut resp_ = txn_res.get_responses();
+            assert_eq!(resp_.len(), 1, "txn response length should be 1");
+            match resp_.pop().unwrap_or_else(|| {
+                panic!("txn response length should be 1 and pop should not fail")
+            }) {
                 TxnOpResponse::Range(mut resp) => {
-                    let kv=resp.take_kvs();
+                    let kv = resp.take_kvs();
                     //key exists
-                    let decoded_value: T = util::decode_from_bytes(kv[0].value())?;
+                    let decoded_value: T = util::decode_from_bytes(
+                        kv.get(0)
+                            .unwrap_or_else(|| {
+                                panic!("get kv result failed");
+                            })
+                            .value(),
+                    )?;
                     Ok(Some(decoded_value))
                 }
                 _ => {
@@ -317,7 +325,9 @@ impl EtcdDelegate {
     /// if key exist, don't insert, return the old value
     /// if key not exist, insert, return None
     #[inline]
-    pub async fn write_new_kv_no_panic<T: DeserializeOwned + Serialize + Clone + Debug + Send + Sync>(
+    pub async fn write_new_kv_no_panic<
+        T: DeserializeOwned + Serialize + Clone + Debug + Send + Sync,
+    >(
         &self,
         key: &str,
         value: &T,
@@ -326,7 +336,6 @@ impl EtcdDelegate {
 
         self.write_to_etcd_if_none(key, value,expire).await
     }
-
 
     /// Write key value pair to etcd, if key exists, update it
     #[inline]
