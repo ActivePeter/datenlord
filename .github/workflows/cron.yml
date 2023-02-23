@@ -219,6 +219,12 @@ jobs:
           done
           for ip in ${NODES_IP}; do
               ssh-keyscan -H $ip >> ${HOME}/.ssh/known_hosts
+              ssh -q ${USER}@$ip exit
+              if [ $? -eq 0 ];then
+                      echo "$ip:yes ssh"
+              else
+                      echo "$ip:no ssh"
+              fi
           done
           END
 
@@ -227,10 +233,8 @@ jobs:
           ssh-keygen -t rsa -N '' -f ~/.ssh/id_rsa
           cat ${HOME}/.ssh/id_rsa.pub
           /bin/bash /tmp/setup.sh
-          /bin/bash /tmp/setup.sh
-          /bin/bash /tmp/setup.sh
-          /bin/bash /tmp/setup.sh
-          /bin/bash /tmp/setup.sh
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
       - name: Datenlord Monitoring and Alerting Test
         run: |
           sh scripts/datenlord_monitor_test.sh
