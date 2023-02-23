@@ -419,6 +419,7 @@ impl MetaData for DefaultMetaData {
     }
 
     /// Helper function to lookup
+    #[allow(clippy::too_many_lines)]
     async fn lookup_helper(
         &self,
         parent: INum,
@@ -820,13 +821,15 @@ impl DefaultMetaData {
 
     /// The pre-check before create node
     #[allow(single_use_lifetimes)]
-    async fn create_node_pre_check<'a, 'b>(
+    async fn create_node_pre_check<'a:'b, 'b>(//'long: 'short
         &self,
         parent: INum,
         node_name: &str,
         cache: &'b mut RwLockWriteGuard<'a, BTreeMap<INum, <Self as MetaData>::N>>,
     ) -> anyhow::Result<&'b mut <Self as MetaData>::N> {
-        let parent_node = cache.get_mut(&parent).unwrap_or_else(|| {
+        // Here we must notify the ref type with lifetime，
+        //  or the compiler will misunderstand.
+        let parent_node:&'b mut <Self as MetaData>::N = cache.get_mut(&parent).unwrap_or_else(|| {
             panic!(
                 "create_node_pre_check() found fs is inconsistent, \
                     parent of ino={} should be in cache before create it new child",

@@ -13,6 +13,7 @@ use s3::{
 };
 use serde_xml_rs as serde_xml;
 use std::time::SystemTime;
+use std::fmt::Write;
 
 /// S3 backend error
 #[derive(thiserror::Error, Debug)]
@@ -318,13 +319,13 @@ pub fn format_anyhow_error(error: &anyhow::Error) -> String {
         .map(std::string::ToString::to_string)
         .collect::<Vec<_>>();
     let mut err_msg = err_msg_vec.as_slice().join(", caused by: ");
-    err_msg.push_str(&format!(", root cause: {}", error.root_cause()));
+    write!(err_msg,", root cause: {}", error.root_cause()).unwrap_or_else(|e|{panic!("concat failed {}",e)});
     err_msg
 }
 
 #[derive(Debug)]
 /// Do nothing S3 backend
-pub struct DoNothingImpl {}
+pub struct DoNothingImpl;
 
 #[async_trait]
 impl S3BackEnd for DoNothingImpl {

@@ -198,6 +198,7 @@ pub async fn get_volume_nodes(
 }
 
 /// Modify node list of a file
+#[allow(clippy::type_repetition_in_bounds)]// func is dynamic, combining the bounds will make it harder to change.
 async fn modify_file_node_list<F: Fn(Option<Vec<u8>>) -> HashSet<String>>(
     etcd_client: &EtcdDelegate,
     file_name: &[u8],
@@ -343,7 +344,7 @@ pub async fn fetch_add_inode_next_range(
 ) -> anyhow::Result<INum> {
     // Use cas to replace the lock
     // Lock before rewrite
-    let lockkey = lock_inode_number(etcd_client.clone()).await?;
+    let lockkey = lock_inode_number(Arc::clone(&etcd_client)).await?;
     let inode_range_begin: Option<Vec<u8>> = etcd_client
         .get_at_most_one_value(ETCD_INODE_NEXT_RANGE.as_bytes())
         .await
@@ -363,7 +364,9 @@ pub async fn fetch_add_inode_next_range(
     // Add up and store data back to etcd
     let next = inode_range_begin.overflowing_add(range);
     etcd_client
-        .write_or_update_kv(ETCD_INODE_NEXT_RANGE, &bincode::serialize(&next).unwrap())
+        .write_or_update_kv(ETCD_INODE_NEXT_RANGE, 
+            &bincode::serialize(&next)
+            .unwrap_or_else(|e|{panic!("Serialize number failed, which shouldn't happen. {}",e)}))
         .await?;
     unlock_inode_number(etcd_client, lockkey).await?;
 

@@ -42,6 +42,8 @@
     clippy::exhaustive_enums,
     clippy::missing_panics_doc, // TODO: add panic docs
     clippy::panic_in_result_fn,
+    clippy::mod_module_files, // We use mod in this project
+    clippy::pub_use, // pub_use is in useful for export some module.
 )]
 
 pub mod common;

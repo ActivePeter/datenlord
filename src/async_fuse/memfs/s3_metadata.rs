@@ -545,13 +545,15 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
 impl<S: S3BackEnd + Send + Sync + 'static> S3MetaData<S> {
     /// The pre-check before create node
     #[allow(single_use_lifetimes)]
-    async fn create_node_pre_check<'a, 'b>(
+    async fn create_node_pre_check<'a:'b, 'b>(// a longer than b
         &self,
         parent: INum,
         node_name: &str,
         cache: &'b mut RwLockWriteGuard<'a, BTreeMap<INum, <Self as MetaData>::N>>,
     ) -> anyhow::Result<&'b mut <Self as MetaData>::N> {
-        let parent_node = cache.get_mut(&parent).unwrap_or_else(|| {
+        // Here we must notify the ref type with lifetime，
+        //  or the compiler will misunderstand.
+        let parent_node:&'b mut <Self as MetaData>::N = cache.get_mut(&parent).unwrap_or_else(|| {
             panic!(
                 "create_node_pre_check() found fs is inconsistent, \
                     parent of ino={} should be in cache before create it new child",

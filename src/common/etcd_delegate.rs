@@ -230,9 +230,10 @@ impl EtcdDelegate {
                     )?;
                     Ok(Some(decoded_value))
                 }
-                _ => {
+                TxnOpResponse::Put(_) | TxnOpResponse::Delete(_) | TxnOpResponse::Txn(_) => {
                     panic!("txn response should be RangeResponse");
                 }
+                _ => {panic!("unhandled new implementation")},
             }
         }
     }

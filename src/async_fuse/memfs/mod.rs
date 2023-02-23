@@ -4,6 +4,7 @@ mod dir;
 /// distributed communication module
 pub mod dist;
 mod fs_util;
+/// inode related module
 mod inode;
 /// fs metadata module
 mod metadata;

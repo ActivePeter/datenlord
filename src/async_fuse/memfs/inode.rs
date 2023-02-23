@@ -6,26 +6,30 @@ use crate::common::etcd_delegate::EtcdDelegate;
 use clippy_utilities::OverflowArithmetic;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use std::ops::Sub;
 
+/// Record some local global state for inode
+/// 1.inode number related
 #[derive(Debug)]
 pub(crate) struct InodeState {
     /// Use tokio mutex to avoid block when waiting for etcd.
     range_begin_end: Mutex<(INum, INum)>,
+    /// When detected conflict, send the used inum back for the next time reuse.
     recycle_unused: crossbeam_queue::SegQueue<INum>,
 }
 
 impl InodeState {
-    pub fn new() -> Self {
+    /// new `InodeState`
+    pub(crate) fn new() -> Self {
         Self {
             range_begin_end: Mutex::new((0, 0)),
-            recycle_unused: Default::default(),
+            recycle_unused: crossbeam_queue::SegQueue::default(),
         }
     }
-}
 
-impl InodeState {
     /// just get a unique inum
     async fn alloc_inum(&self, etcd_client: &Arc<EtcdDelegate>) -> INum {
+        /// The step range for current allocated range used up.
         const INODE_RANGE: u64 = 10000;
         if let Some(inum) = self.recycle_unused.pop() {
             return inum;
@@ -43,7 +47,7 @@ impl InodeState {
             // begin
             range_begin_end.0 = ret;
             // end
-            range_begin_end.1 = ret.overflow_add(INODE_RANGE - 1);
+            range_begin_end.1 = ret.overflow_add(INODE_RANGE.sub(1));
             ret
         } else {
             let ret = range_begin_end.0;
@@ -65,7 +69,7 @@ impl InodeState {
     //  3. communicate and found no inum;  try write kv when there's none;  write failed and get old;
 
     /// get a unique inum for a path when cache miss or creating a new file
-    /// return (inum, is_new)
+    /// return (inum, `is_new`)
     async fn inode_get_inum_by_fullpath(
         &self,
         fullpath: &str,
@@ -74,14 +78,14 @@ impl InodeState {
         etcd_client: &Arc<EtcdDelegate>,
     ) -> (INum, bool) {
         //  1. communicate with other nodes and try to get existing inode info
-        let fattr = dist::client::get_attr(Arc::clone(etcd_client), node_id, volume_info, fullpath)
+        let f_attr = dist::client::get_attr(Arc::clone(etcd_client), node_id, volume_info, fullpath)
             .await
             .unwrap_or_else(|e| panic!("failed to get attr, error is {:?}", e));
-        match fattr {
+        match f_attr {
             None => {
                 let inum = self.alloc_inum(etcd_client).await;
                 let marked_inum =
-                    etcd::mark_fullpath_with_ino_in_etcd(etcd_client, &fullpath, inum)
+                    etcd::mark_fullpath_with_ino_in_etcd(etcd_client, fullpath, inum)
                         .await
                         .unwrap_or_else(|e| {
                             panic!("failed to mark fullpath with ino in etcd, error is {:?}", e)
@@ -102,12 +106,13 @@ impl InodeState {
 }
 
 impl<S: S3BackEnd + Send + Sync + 'static> S3MetaData<S> {
+    /// Get global no conflict inum for unique path.
     #[inline]
     pub(crate) async fn inode_get_inum_by_fullpath(&self, fullpath: &str) -> (INum, bool) {
         self.inode_state
             .inode_get_inum_by_fullpath(
                 fullpath,
-                &self.node_id.as_str(),
+                self.node_id.as_str(),
                 self.volume_info.as_str(),
                 &self.etcd_client,
             )
