@@ -9,6 +9,7 @@ use crate::common::etcd_delegate::EtcdDelegate;
 
 #[derive(Debug)]
 pub(crate) struct InodeState {
+    /// Use tokio mutex to avoid block when waiting for etcd.
     range_begin_end:Mutex<(INum,INum)>,
     recycle_unused:crossbeam_queue::SegQueue<INum>,
 }
@@ -29,8 +30,8 @@ impl InodeState {
         if let Some(inum)= self.recycle_unused.pop(){
             return inum;
         }
-        let mut locked=self.range_begin_end.lock().await;
-        if locked.0==locked.1{
+        let mut range_begin_end=self.range_begin_end.lock().await;
+        if range_begin_end.0==range_begin_end.1{
             // need update
             let ret=etcd::fetch_add_inode_next_range(
                 // here appeared an await, so we need to use tokio::sync::Mutex
@@ -38,13 +39,13 @@ impl InodeState {
                 panic!("failed to fetch add inode next range, error is {:?}", e)
             });
             // begin
-            locked.0=ret;
+            range_begin_end.0=ret;
             // end
-            locked.1=ret.overflow_add(INODE_RANGE-1);
+            range_begin_end.1=ret.overflow_add(INODE_RANGE-1);
             ret
         }else {
-            let ret=locked.0;
-            locked.0=locked.0.overflow_add(1);
+            let ret=range_begin_end.0;
+            range_begin_end.0=range_begin_end.0.overflow_add(1);
             ret
         }
     }
@@ -57,18 +58,11 @@ impl InodeState {
     // Another case is load uncached file from s3
     // The main point is to avoid two requests with same file path, but different inode number
 
-    // Solution one: yse a global lock for one path, like "lock"+path
-    //  cases:
-    //  1. communicate with other nodes, and got inum
-    //  2. communicate and found no inum;  lock;  communicate and found no inum;  alloc ino;  unlock
-    //  3. communicate and found no inum;  lock;  communicate and found inum;  unlock;
-    //
-    // (chosen) Solution two: use a global inode number for path, like "inode"+path: inum
+    // Solution: use a global inode number for path, like "inode"+path: inum
     //  cases:
     //  1. communicate with other nodes, and got inum
     //  2. communicate and found no inum;  try write kv when there's none;  write success;
     //  3. communicate and found no inum;  try write kv when there's none;  write failed and get old;
-
 
     /// get a unique inum for a path when cache miss or creating a new file
     /// return (inum, is_new)
@@ -81,14 +75,10 @@ impl InodeState {
         match fattr {
             None => {
                 let inum=self.alloc_inum(etcd_client).await;
-                // try write kv when there's none
-                // if there's none, write success
-                // if there's some, write failed and get old
                 let marked_inum=etcd::mark_fullpath_with_ino_in_etcd(etcd_client,&fullpath,inum).await.unwrap_or_else(|e|{
                     panic!("failed to mark fullpath with ino in etcd, error is {:?}", e)
                 });
                 if marked_inum==inum{// write success
-
                     (inum,true)
                 }else{// write failed
                     // unused inum
@@ -97,11 +87,9 @@ impl InodeState {
                 }
             }
             Some(attr) => {
-                // update local cache
                 (attr.ino,false)
             }
         }
-        // TODO key should be removed after a while or file is in cache.
     }
 }
 

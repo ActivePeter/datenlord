@@ -312,14 +312,6 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
         self.sync_dir_remote(&parent_full_path, node_name, &child_attr, target_path)
             .await;
 
-        // We dont need to sync for the unmark
-        // todo: use etcd lease for auto expire.
-        let etcd_client=Arc::clone(&self.etcd_client);
-        tokio::spawn(async move{
-            etcd::unmark_fullpath_with_ino_in_etcd(etcd_client,full_path).await;
-        });
-        // inode is cached, so we should remove the path mark
-
         let ttl = Duration::new(MY_TTL_SEC, 0);
         Ok((ttl, fuse_attr, MY_GENERATION))
     }
@@ -464,17 +456,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
                 let mut cache = self.cache.write().await;
                 cache.insert(child_ino, child_node);
             }
-            {
-                let fullpath=full_path.clone();
-                // We dont need to sync for the unmark
-                // todo: use etcd lease for auto expire.
-                let etcd_client=Arc::clone(&self.etcd_client);
-                tokio::spawn(async move{
-                    etcd::unmark_fullpath_with_ino_in_etcd(etcd_client,fullpath).await;
-                });
-            }
             self.path2inum.write().await.insert(full_path, child_ino);
-
             let fuse_attr = fs_util::convert_to_fuse_attr(attr);
             debug!(
                 "lookup_helper() successfully found the i-node of ino={} and name={:?} \
