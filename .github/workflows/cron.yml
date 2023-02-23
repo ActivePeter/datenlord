@@ -233,8 +233,26 @@ jobs:
           ssh-keygen -t rsa -N '' -f ~/.ssh/id_rsa
           cat ${HOME}/.ssh/id_rsa.pub
           /bin/bash /tmp/setup.sh
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
+      - name: Test SSH
+        run: |
+          
+          echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
+          cat >>/tmp/test_ssh.sh <<'END'
+          NODES_IP="$(kubectl get nodes -A -o wide | awk 'FNR > 2 {print $6}')"
+          NODES="$(kubectl get nodes -A -o wide | awk 'FNR > 2 {print $1}')"
+          
+          for ip in ${NODES_IP}; do
+              ssh-keyscan -H $ip >> ${HOME}/.ssh/known_hosts
+              ssh -q ${USER}@$ip exit
+              if [ $? -eq 0 ];then
+                      echo "$ip:yes ssh"
+              else
+                      echo "$ip:no ssh"
+              fi
+          done
+          END
+
+          /bin/bash /tmp/test_ssh.sh
       - name: Datenlord Monitoring and Alerting Test
         run: |
           sh scripts/datenlord_monitor_test.sh
