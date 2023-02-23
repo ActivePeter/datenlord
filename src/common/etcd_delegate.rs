@@ -8,7 +8,8 @@ use serde::Serialize;
 use std::fmt;
 use std::fmt::Debug;
 use std::time::Duration;
-use etcd_client::{TxnCmp,TxnOpResponse};
+use etcd_client::{EtcdLeaseGrantRequest, EtcdLeaseGrantResponse, TxnCmp, TxnOpResponse};
+
 /// The client to communicate with etcd
 #[allow(missing_debug_implementations)] // etcd_client::Client doesn't impl Debug
 #[derive(Clone)]
@@ -164,11 +165,17 @@ impl EtcdDelegate {
         &self,
         key: K,
         value: &T,
+        expire: Option<Duration>,
     ) -> DatenLordResult<Option<T>> {
-
         let bin_value = bincode::serialize(value)
             .with_context(|| format!("failed to encode {value:?} to binary"))?;
-
+        let mut put_request=etcd_client::EtcdPutRequest::new(key.clone(), bin_value);
+        if let Some(dur)=expire{
+            put_request.set_lease(self.etcd_rs_client.lease().grant(
+                EtcdLeaseGrantRequest::new(dur)).await.with_context(|| {
+                    format!("failed to get LeaseGrantResponse from etcd, the timeout={}",dur.as_secs())
+                })?.id());
+        };
         let txn_req=etcd_client::EtcdTxnRequest::new()
             // etcd：chack key exist in txn
             //  https://github.com/etcd-io/etcd/issues/7115
@@ -176,9 +183,10 @@ impl EtcdDelegate {
             //key does not exist when create revision is 0, check the links above
             .when_create_revision(etcd_client::KeyRange::key(key.clone()), TxnCmp::Equal,0)
             //key does not exist, insert kv
-            .and_then(etcd_client::EtcdPutRequest::new(key.clone(), bin_value))
+            .and_then(put_request)
             //key exists, return old value
             .or_else(etcd_client::EtcdRangeRequest::new(etcd_client::KeyRange::key(key.clone())));
+
         let txn_res=self.etcd_rs_client.kv().txn(txn_req).await.with_context(|| {
             format!(
                 "failed to get PutResponse from etcd for key={:?}, value={:?}",
@@ -306,16 +314,17 @@ impl EtcdDelegate {
         }
     }
 
-    /// return exist value if key exists
-    /// return none if key does not exist
+    /// if key exist, don't insert, return the old value
+    /// if key not exist, insert, return None
     #[inline]
     pub async fn write_new_kv_no_panic<T: DeserializeOwned + Serialize + Clone + Debug + Send + Sync>(
         &self,
         key: &str,
         value: &T,
+        expire: Option<Duration>,
     ) -> DatenLordResult<Option<T>> {
 
-        self.write_to_etcd_if_none(key, value).await
+        self.write_to_etcd_if_none(key, value,expire).await
     }
 
 
