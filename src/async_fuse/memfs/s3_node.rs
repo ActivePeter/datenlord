@@ -160,43 +160,6 @@ impl<S: S3BackEnd + Send + Sync + 'static> S3Node<S> {
         old_attr
     }
 
-    // /// Get a new inode number
-    // async fn new_inode_num(&self) -> u64 {
-    //     let lock_key = etcd::lock_inode_number(Arc::<EtcdDelegate>::clone(&self.meta.etcd_client))
-    //         .await
-    //         .unwrap_or_else(|e| panic!("failed to get etcd inode number lock, error is {:?}", e));
-    //     let default = self.meta.cur_inum();
-    //     let cur_inum = dist_client::get_ino_num(
-    //         Arc::<EtcdDelegate>::clone(&self.meta.etcd_client),
-    //         &self.meta.node_id,
-    //         &self.meta.volume_info,
-    //         default,
-    //     )
-    //     .await
-    //     .unwrap_or_else(|e| {
-    //         warn!("Load inode num from other node error: {}", e);
-    //         default
-    //     });
-    //
-    //     let inum = if cur_inum > default {
-    //         self.meta
-    //             .cur_inum
-    //             .store(cur_inum.overflow_add(1), atomic::Ordering::Relaxed);
-    //         cur_inum.cast()
-    //     } else {
-    //         self.meta
-    //             .cur_inum
-    //             .fetch_add(1, atomic::Ordering::SeqCst)
-    //             .cast()
-    //     };
-    //     etcd::unlock_inode_number(Arc::<EtcdDelegate>::clone(&self.meta.etcd_client), lock_key)
-    //         .await
-    //         .unwrap_or_else(|e| {
-    //             panic!("failed to release etcd inode number lock, error is {:?}", e)
-    //         });
-    //     inum
-    // }
-
     /// Get fullpath of this node
     pub(crate) fn full_path(&self) -> &str {
         self.full_path.as_str()

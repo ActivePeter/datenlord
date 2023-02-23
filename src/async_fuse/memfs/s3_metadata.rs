@@ -543,11 +543,6 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
 }
 
 impl<S: S3BackEnd + Send + Sync + 'static> S3MetaData<S> {
-    // /// Get current inode number
-    // pub(crate) fn cur_inum(&self) -> u32 {
-    //     self.cur_inum.load(Ordering::Relaxed)
-    // }
-
     /// The pre-check before create node
     #[allow(single_use_lifetimes)]
     async fn create_node_pre_check<'a, 'b>(
