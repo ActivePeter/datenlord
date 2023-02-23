@@ -27,9 +27,9 @@ env:
   GRAFANA_LABEL: grafana
   GRAFANA_PORT: 3000
   K8S_CONFIG: k8s.e2e.config
-  K8S_VERSION: v1.21.14
+  K8S_VERSION: v1.21.1
   KIBANA_LABEL: kibana
-  KIND_NODE_VERSION: kindest/node:v1.21.14@sha256:9d9eb5fb26b4fbc0c6d95fa8c790414f9750dd583f5d7cee45d92e8c26670aa1
+  KIND_NODE_VERSION: kindest/node:v1.21.1
   KIND_VERSION: v0.11.1
   # MINIKUBE_VERSION: v1.13.0
   NODE_APP_LABEL: csi-nodeplugin-datenlord
@@ -202,7 +202,7 @@ jobs:
             USER="$(whoami)"
             docker exec ${node} cat /proc/version
             docker exec ${node} rm -rf /usr/sbin/policy-rc.d
-            # docker cp scripts/ubuntu20sources.list ${node}:/etc/apt/sources.list
+            docker cp scripts/ubuntu20sources.list ${node}:/etc/apt/sources.list
             docker exec ${node} apt-get update
             docker exec ${node} apt-get install -y ssh sudo
             docker exec ${node} systemctl start sshd
