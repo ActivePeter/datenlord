@@ -1,8 +1,8 @@
 use super::cache::GlobalCache;
 use super::dir::DirEntry;
 use super::dist::client as dist_client;
-use super::dist::server::CacheServer;
 use super::dist::etcd;
+use super::dist::server::CacheServer;
 use super::fs_util::{self, FileAttr};
 use super::metadata::MetaData;
 use super::node::Node;
@@ -12,10 +12,12 @@ use super::RenameParam;
 #[cfg(feature = "abi-7-18")]
 use crate::async_fuse::fuse::fuse_reply::FuseDeleteNotification;
 use crate::async_fuse::fuse::protocol::{FuseAttr, INum, FUSE_ROOT_ID};
+use crate::async_fuse::memfs::inode::InodeState;
 use crate::async_fuse::util;
 use crate::common::etcd_delegate::EtcdDelegate;
 use anyhow::Context;
 use async_trait::async_trait;
+use clippy_utilities::{Cast, OverflowArithmetic};
 use itertools::Itertools;
 use log::debug;
 use nix::errno::Errno;
@@ -27,8 +29,6 @@ use std::path::Path;
 use std::sync::{atomic::AtomicU32, Arc};
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock, RwLockWriteGuard};
-use clippy_utilities::{Cast, OverflowArithmetic};
-use crate::async_fuse::memfs::inode::InodeState;
 
 /// The time-to-live seconds of FUSE attributes
 const MY_TTL_SEC: u64 = 3600; // TODO: should be a long value, say 1 hour
@@ -200,10 +200,10 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
                 .create_node_pre_check(parent, node_name, &mut cache)
                 .await
                 .context("create_node_helper() failed to pre check")?;
-            let full_path=format!("{}{}",parent_node.full_path(),node_name);
+            let full_path = format!("{}{}", parent_node.full_path(), node_name);
             // check cluster conflict creating by trying to alloc ino
-            let (inum,is_new)=self.inode_get_inum_by_fullpath(full_path.as_str()).await;
-            if !is_new{
+            let (inum, is_new) = self.inode_get_inum_by_fullpath(full_path.as_str()).await;
+            if !is_new {
                 // inum created by others or exist in remote cache
                 //todo delete parent node cache to update parent dir content
                 return Err(anyhow::anyhow!("create_node_helper() failed to create node, ino alloc failed, \
@@ -305,7 +305,12 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
                     parent, parent_name
                 )
             });
-            (pnode.full_path().to_owned(), full_path, new_node_attr, fuse_attr)
+            (
+                pnode.full_path().to_owned(),
+                full_path,
+                new_node_attr,
+                fuse_attr,
+            )
         };
 
         self.sync_attr_remote(&parent_full_path).await;
@@ -394,7 +399,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
             let remote_attr = self.get_attr_remote(&child_path).await;
             // we don't care whether the inum is new or not,
             // we just need a unique one for unique path.
-            let (inum,_is_new)=self.inode_get_inum_by_fullpath(child_path.as_str()).await;
+            let (inum, _is_new) = self.inode_get_inum_by_fullpath(child_path.as_str()).await;
             let (mut child_node, parent_name) = {
                 let cache = self.cache.read().await;
                 let parent_node = cache.get(&parent).unwrap_or_else(|| {
@@ -432,7 +437,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
                         ))?
                     }
                     SFlag::S_IFLNK => parent_node
-                        .load_child_symlink(inum,child_name, remote_attr)
+                        .load_child_symlink(inum, child_name, remote_attr)
                         .await
                         .context(format!(
                             "lookup_helper() failed to read child symlink name={:?} \
@@ -544,7 +549,6 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
 }
 
 impl<S: S3BackEnd + Send + Sync + 'static> S3MetaData<S> {
-    
     // /// Get current inode number
     // pub(crate) fn cur_inum(&self) -> u32 {
     //     self.cur_inum.load(Ordering::Relaxed)

@@ -1,9 +1,9 @@
+use crate::async_fuse::fuse::protocol::INum;
 use crate::common::error::Context;
 use crate::common::etcd_delegate::EtcdDelegate;
 use log::debug;
 use std::collections::HashSet;
 use std::sync::Arc;
-use crate::async_fuse::fuse::protocol::INum;
 
 /// ETCD node id counter key
 const ETCD_NODE_ID_COUNTER_KEY: &str = "datenlord_node_id_counter";
@@ -336,11 +336,14 @@ pub async fn unlock_inode_number(
 }
 
 /// increase the inode number range begin in global cluster
-pub async fn fetch_add_inode_next_range(etcd_client: Arc<EtcdDelegate>,range:u64) -> anyhow::Result<INum> {
+pub async fn fetch_add_inode_next_range(
+    etcd_client: Arc<EtcdDelegate>,
+    range: u64,
+) -> anyhow::Result<INum> {
     // Use cas to replace the lock
     // Lock before rewrite
-    let lockkey=lock_inode_number(etcd_client.clone()).await?;
-    let inode_range_begin: Option<Vec<u8>>  = etcd_client
+    let lockkey = lock_inode_number(etcd_client.clone()).await?;
+    let inode_range_begin: Option<Vec<u8>> = etcd_client
         .get_at_most_one_value(ETCD_INODE_NEXT_RANGE.as_bytes())
         .await
         .with_context(|| format!("get {} from etcd fail", ETCD_INODE_NEXT_RANGE))?;
@@ -349,10 +352,7 @@ pub async fn fetch_add_inode_next_range(etcd_client: Arc<EtcdDelegate>,range:u64
     let inode_range_begin = match inode_range_begin {
         Some(number) => {
             let number: INum = bincode::deserialize(number.as_slice()).unwrap_or_else(|e| {
-                panic!(
-                    "fail to deserialize inode number from etcd, error: {}",
-                    e
-                );
+                panic!("fail to deserialize inode number from etcd, error: {}", e);
             });
             number
         }
@@ -360,9 +360,10 @@ pub async fn fetch_add_inode_next_range(etcd_client: Arc<EtcdDelegate>,range:u64
         None => 2,
     };
     // Add up and store data back to etcd
-    let next=inode_range_begin.overflowing_add(range);
-    etcd_client.write_or_update_kv(ETCD_INODE_NEXT_RANGE,
-                                   &bincode::serialize(&next).unwrap()).await?;
+    let next = inode_range_begin.overflowing_add(range);
+    etcd_client
+        .write_or_update_kv(ETCD_INODE_NEXT_RANGE, &bincode::serialize(&next).unwrap())
+        .await?;
     unlock_inode_number(etcd_client, lockkey).await?;
 
     Ok(inode_range_begin)
@@ -370,14 +371,18 @@ pub async fn fetch_add_inode_next_range(etcd_client: Arc<EtcdDelegate>,range:u64
 
 /// Mark a path with ino in etcd
 /// Only one can mark path successfully
-pub async fn mark_fullpath_with_ino_in_etcd(etcd_client: &Arc<EtcdDelegate>,fullpath:&str,ino:u64) -> anyhow::Result<INum> {
-    let key=format!("{}{}",ETCD_INODE_MARK_PREFIX,fullpath);
-    match etcd_client.write_new_kv_no_panic(key.as_str(),&ino)
+pub async fn mark_fullpath_with_ino_in_etcd(
+    etcd_client: &Arc<EtcdDelegate>,
+    fullpath: &str,
+    ino: u64,
+) -> anyhow::Result<INum> {
+    let key = format!("{}{}", ETCD_INODE_MARK_PREFIX, fullpath);
+    match etcd_client
+        .write_new_kv_no_panic(key.as_str(), &ino)
         .await
-        .with_context(|| format!("mark_fullpath_with_ino_in_etcd {} {}",fullpath,ino))?{
-        None => {
-            Ok(ino)
-        }
-        Some(oldino) => {Ok(oldino)}
+        .with_context(|| format!("mark_fullpath_with_ino_in_etcd {} {}", fullpath, ino))?
+    {
+        None => Ok(ino),
+        Some(oldino) => Ok(oldino),
     }
 }
