@@ -1,7 +1,6 @@
 use super::cache::GlobalCache;
 use super::dir::DirEntry;
 use super::dist::client as dist_client;
-use super::dist::etcd;
 use super::dist::server::CacheServer;
 use super::fs_util::{self, FileAttr};
 use super::metadata::MetaData;
@@ -194,7 +193,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
         target_path: Option<&Path>,
     ) -> anyhow::Result<(Duration, FuseAttr, u64)> {
         // pre-check
-        let (parent_full_path, full_path, child_attr, fuse_attr) = {
+        let (parent_full_path, child_attr, fuse_attr) = {
             let mut cache = self.cache.write().await;
             let parent_node = self
                 .create_node_pre_check(parent, node_name, &mut cache)
@@ -305,12 +304,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
                     parent, parent_name
                 )
             });
-            (
-                pnode.full_path().to_owned(),
-                full_path,
-                new_node_attr,
-                fuse_attr,
-            )
+            (pnode.full_path().to_owned(), new_node_attr, fuse_attr)
         };
 
         self.sync_attr_remote(&parent_full_path).await;

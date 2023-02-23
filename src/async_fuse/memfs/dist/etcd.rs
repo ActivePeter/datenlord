@@ -5,7 +5,6 @@ use log::debug;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
-use crate::async_fuse::fuse::protocol::INum;
 
 /// ETCD node id counter key
 const ETCD_NODE_ID_COUNTER_KEY: &str = "datenlord_node_id_counter";
@@ -373,10 +372,15 @@ pub async fn fetch_add_inode_next_range(
 
 /// Mark a path with ino in etcd
 /// Only one can mark path successfully
-pub async fn mark_fullpath_with_ino_in_etcd(etcd_client: &Arc<EtcdDelegate>,fullpath:&str,ino:u64) -> anyhow::Result<INum> {
-    let mark_timeout=Duration::from_secs(15);
-    let key=format!("{}{}",ETCD_INODE_MARK_PREFIX,fullpath);
-    match etcd_client.write_new_kv_no_panic(key.as_str(),&ino,Some(mark_timeout))
+pub async fn mark_fullpath_with_ino_in_etcd(
+    etcd_client: &Arc<EtcdDelegate>,
+    fullpath: &str,
+    ino: u64,
+) -> anyhow::Result<INum> {
+    let mark_timeout = Duration::from_secs(15);
+    let key = format!("{}{}", ETCD_INODE_MARK_PREFIX, fullpath);
+    match etcd_client
+        .write_new_kv_no_panic(key.as_str(), &ino, Some(mark_timeout))
         .await
         .with_context(|| format!("mark_fullpath_with_ino_in_etcd {} {}", fullpath, ino))?
     {
