@@ -14,7 +14,7 @@ mod s3_metadata;
 mod s3_node;
 /// S3 backend wrapper module
 pub mod s3_wrapper;
-mod persist;
+pub mod persist;
 
 use std::collections::BTreeMap;
 use std::os::unix::ffi::OsStringExt;
@@ -30,7 +30,8 @@ use log::{debug, warn};
 use nix::errno::Errno;
 use nix::sys::stat::SFlag;
 
-use crate::async_fuse::fuse::file_system::FileSystem;
+use crate::async_fuse::fuse::file_system;
+use crate::async_fuse::fuse::file_system::{FileSystem, FsAsyncResultReceiver, FsAsyncResultSender};
 use crate::async_fuse::fuse::fuse_reply::AsIoVec;
 use crate::async_fuse::fuse::fuse_reply::{
     ReplyAttr, ReplyBMap, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
@@ -59,6 +60,7 @@ pub struct MemFs<M: MetaData + Send + Sync + 'static> {
     #[allow(dead_code)]
     /// Cache server
     server: Option<CacheServer>,
+    async_result_sender:FsAsyncResultSender,
 }
 
 /// Set attribute parameters
@@ -142,7 +144,8 @@ impl<M: MetaData + Send + Sync + 'static> MemFs<M> {
         etcd_client: EtcdDelegate,
         node_id: &str,
         volume_info: &str,
-    ) -> anyhow::Result<Self> {
+    ) -> anyhow::Result<(Self,FsAsyncResultReceiver)> {
+        let (sender,receiver)=file_system::new_fs_async_result_chan();
         let (metadata, server) = M::new(
             mount_point,
             capacity,
@@ -151,9 +154,10 @@ impl<M: MetaData + Send + Sync + 'static> MemFs<M> {
             etcd_client,
             node_id,
             volume_info,
+            sender.clone(),
         )
         .await;
-        Ok(Self { metadata, server })
+        Ok((Self { metadata, server, async_result_sender:sender },receiver))
     }
 
     /// Read content check
@@ -1288,6 +1292,18 @@ impl<M: MetaData + Send + Sync + 'static> FileSystem for MemFs<M> {
     /// Set fuse fd into `FileSystem`
     async fn set_fuse_fd(&self, fuse_fd: RawFd) {
         self.metadata.set_fuse_fd(fuse_fd).await;
+    }
+
+    async fn send_fs_async_result(&self, result: anyhow::Result<()>) {
+        self.sender.send(result).await;
+    }
+
+    async fn recv_fs_async_result(&self) -> anyhow::Result<()> {
+        self.async_result_receiver.recv()
+    }
+
+    async fn stop_all_async_tasks(&self){
+        self.metadata.stop_all_async_tasks().await;
     }
 }
 

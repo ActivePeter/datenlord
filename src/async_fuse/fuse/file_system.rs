@@ -283,4 +283,20 @@ pub trait FileSystem {
 
     /// Set fuse fd into `FileSystem`
     async fn set_fuse_fd(&self, fuse_fd: RawFd);
+
+    /// Send fs async result by async tasks like persist task.
+    async fn send_fs_async_result(&self, result: anyhow::Result<()>);
+
+    /// Receive fs async result
+    async fn recv_fs_async_result(&self) -> anyhow::Result<()>;
+
+    /// Stop all async tasks
+    async fn stop_all_async_tasks(&self);
 }
+
+pub(crate) fn new_fs_async_result_chan()->(FsAsyncResultSender,FsAsyncResultReceiver){
+    tokio::sync::mpsc::channel(10)
+}
+pub(crate) type FsAsyncResult= anyhow::Result<()>;
+pub(crate) type FsAsyncResultSender= tokio::sync::mpsc::Sender<anyhow::Result<()>>;
+pub(crate) type FsAsyncResultReceiver= tokio::sync::mpsc::Receiver<anyhow::Result<()>>;

@@ -3,6 +3,7 @@
 use crate::{common::etcd_delegate::EtcdDelegate, AsyncFuseArgs, VolumeType};
 use fuse::session::Session;
 use memfs::s3_wrapper::{DoNothingImpl, S3BackEndImpl};
+use crate::async_fuse::fuse::file_system::FsAsyncResultReceiver;
 
 pub mod fuse;
 pub mod memfs;
@@ -29,7 +30,8 @@ pub async fn start_async_fuse(
     let mount_point = std::path::Path::new(&args.mount_dir);
     match args.volume_type {
         VolumeType::Local => {
-            let fs: memfs::MemFs<memfs::DefaultMetaData> = memfs::MemFs::new(
+            let (fs,fs_async_res_receiver): (memfs::MemFs<memfs::DefaultMetaData>,FsAsyncResultReceiver) =
+                memfs::MemFs::new(
                 &args.mount_dir,
                 args.cache_capacity,
                 &args.ip_address.to_string(),
@@ -39,11 +41,12 @@ pub async fn start_async_fuse(
                 &args.volume_info,
             )
             .await?;
-            let ss = Session::new(mount_point, fs).await?;
+            let ss = Session::new(mount_point, fs,fs_async_res_receiver).await?;
             ss.run().await?;
         }
         VolumeType::S3 => {
-            let fs: memfs::MemFs<memfs::S3MetaData<S3BackEndImpl>> = memfs::MemFs::new(
+            let (fs,fs_async_res_receiver): (memfs::MemFs<memfs::S3MetaData<S3BackEndImpl>>,FsAsyncResultReceiver) =
+                memfs::MemFs::new(
                 &args.volume_info,
                 args.cache_capacity,
                 &args.ip_address.to_string(),
@@ -53,11 +56,11 @@ pub async fn start_async_fuse(
                 &args.volume_info,
             )
             .await?;
-            let ss = Session::new(mount_point, fs).await?;
+            let ss = Session::new(mount_point, fs,fs_async_res_receiver).await?;
             ss.run().await?;
         }
         VolumeType::None => {
-            let fs: memfs::MemFs<memfs::S3MetaData<DoNothingImpl>> = memfs::MemFs::new(
+            let (fs,fs_async_res_receiver): (memfs::MemFs<memfs::S3MetaData<DoNothingImpl>>,FsAsyncResultReceiver) = memfs::MemFs::new(
                 &args.volume_info,
                 args.cache_capacity,
                 &args.ip_address.to_string(),
@@ -67,7 +70,7 @@ pub async fn start_async_fuse(
                 &args.volume_info,
             )
             .await?;
-            let ss = Session::new(mount_point, fs).await?;
+            let ss = Session::new(mount_point, fs,fs_async_res_receiver).await?;
             ss.run().await?;
         }
     }

@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock, RwLockWriteGuard};
+use crate::async_fuse::fuse::file_system::FsAsyncResultSender;
 
 /// The time-to-live seconds of FUSE attributes
 const MY_TTL_SEC: u64 = 3600; // TODO: should be a long value, say 1 hour
@@ -42,6 +43,7 @@ pub trait MetaData {
         etcd_client: EtcdDelegate,
         node_id: &str,
         volume_info: &str,
+        async_result_sender:FsAsyncResultSender,
     ) -> (Arc<Self>, Option<CacheServer>);
 
     /// Helper function to create node
@@ -97,6 +99,8 @@ pub trait MetaData {
 
     /// Set fuse fd into `MetaData`
     async fn set_fuse_fd(&self, fuse_fd: RawFd);
+
+    async fn stop_all_async_tasks(&self);
 }
 
 /// File system in-memory meta-data

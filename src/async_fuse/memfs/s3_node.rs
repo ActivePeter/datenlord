@@ -26,6 +26,7 @@ use std::sync::atomic::{self, AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::RwLockWriteGuard;
+use crate::async_fuse::memfs::persist;
 
 /// Block size constant
 const BLOCK_SIZE: usize = 1024;
@@ -266,34 +267,53 @@ impl<S: S3BackEnd + Send + Sync + 'static> S3Node<S> {
 
     /// Open root node
     #[allow(clippy::unnecessary_wraps)]
-    pub(crate) fn open_root_node(
+    pub(crate) async fn open_root_node(
         root_ino: INum,
         name: &str,
         s3_backend: Arc<S>,
         meta: Arc<S3MetaData<S>>,
     ) -> anyhow::Result<Self> {
-        let now = SystemTime::now();
-        let attr = FileAttr {
-            ino: root_ino,
-            atime: now,
-            mtime: now,
-            ctime: now,
-            crtime: now,
-            kind: SFlag::S_IFDIR,
-            ..FileAttr::default()
-        };
+        let root = persist::read_persisted_dir(&s3_backend, "/".to_owned()).await;
+        match root {
+            Ok(mut root) => {
+                if let Some(root_attr) = root.persist_serialized.root_attr.take() {
+                    Ok(Self::new(
+                        root_ino,
+                        name,
+                        "/".to_owned(),
+                        root_attr, root.new_s3_node_data_dir(),
+                        s3_backend,
+                        meta))
+                } else {
+                    debug!("failed to read persisted root dir, attr of root dir is not persisted");
+                    // where to define error?
+                    Err()
+                }
+            }
+            Err(e) => {
+                debug!("failed to read persisted dir, error: {e}");
+                let now = SystemTime::now();
+                let attr = FileAttr {
+                    ino: root_ino,
+                    atime: now,
+                    mtime: now,
+                    ctime: now,
+                    crtime: now,
+                    kind: SFlag::S_IFDIR,
+                    ..FileAttr::default()
+                };
 
-        let root_node = Self::new(
-            root_ino,
-            name,
-            "/".to_owned(),
-            attr,
-            S3NodeData::Directory(BTreeMap::new()),
-            s3_backend,
-            meta,
-        );
-
-        Ok(root_node)
+                Self::new(
+                    root_ino,
+                    name,
+                    "/".to_owned(),
+                    attr,
+                    S3NodeData::Directory(BTreeMap::new()),
+                    s3_backend,
+                    meta,
+                )
+            }
+        }
     }
 
     /// flush all data of a node
@@ -722,7 +742,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
                         )
                     }),
             )
-            .unwrap_or_else(|e| panic!("failed to convert to utf string, error is {e:?}")),
+                .unwrap_or_else(|e| panic!("failed to convert to utf string, error is {e:?}")),
         );
 
         Ok(Self::new(
@@ -953,7 +973,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
                     &self.meta.volume_info,
                     &self.full_path,
                 )
-                .await?
+                    .await?
                 {
                     Some(entries) => entries,
                     None => BTreeMap::new(),
@@ -987,7 +1007,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
                         .overflow_div(global_cache.get_align().cast())
                         .cast(),
                 )
-                .await?
+                    .await?
                 {
                     None => {
                         match self

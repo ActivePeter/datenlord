@@ -16,6 +16,7 @@ use libc::ino_t;
 use memchr::memchr;
 use nix::fcntl::OFlag;
 use nix::sys::stat::{Mode, SFlag};
+use crate::async_fuse::memfs::fs_util::FileAttr;
 
 /// Directory meta-data
 pub struct Dir(NonNull<libc::DIR>);
@@ -113,26 +114,23 @@ impl IntoIterator for Dir {
 /// Directory entry
 #[derive(Debug, Clone)]
 pub struct DirEntry {
-    /// The i-number of the entry
-    ino: ino_t,
-    /// The `SFlag` type of the entry
-    entry_type: SFlag,
     /// The entry name
     name: String,
+    file_attr:FileAttr
 }
 
 impl DirEntry {
     /// Create `DirEntry`
-    pub const fn new(ino: ino_t, name: String, entry_type: SFlag) -> Self {
+    pub const fn new(name: String,
+                     file_attr:FileAttr) -> Self {
         Self {
-            ino,
-            entry_type,
             name,
+            file_attr,
         }
     }
     /// Returns the inode number (`d_ino`) of the underlying `dirent`.
     pub const fn ino(&self) -> ino_t {
-        self.ino
+        self.file_attr.ino
     }
 
     /// Returns the bare file name of this directory entry without any other leading path component.
@@ -146,7 +144,7 @@ impl DirEntry {
     /// notably, some Linux filesystems don't implement this. The caller should use `stat` or
     /// `fstat` if this returns `None`.
     pub const fn entry_type(&self) -> SFlag {
-        self.entry_type
+        self.file_attr.kind
     }
 
     /// Build `DirEntry` from `libc::dirent64`

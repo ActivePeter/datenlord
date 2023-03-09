@@ -106,6 +106,7 @@ impl InodeState {
 
 impl<S: S3BackEnd + Send + Sync + 'static> S3MetaData<S> {
     /// alloc global conflict free inum for a path
+    /// return (inum, `is_new`)
     #[inline]
     pub(crate) async fn inode_get_inum_by_fullpath(&self, fullpath: &str) -> (INum, bool) {
         self.inode_state
