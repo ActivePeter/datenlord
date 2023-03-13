@@ -1,9 +1,10 @@
 use super::cache::GlobalCache;
 use super::dir::DirEntry;
 use super::dist::server::CacheServer;
-use super::fs_util;
+use super::fs_util::{self, FileAttr};
 use super::node::{self, DefaultNode, Node};
 use super::RenameParam;
+use crate::async_fuse::fuse::file_system::FsAsyncResultSender;
 use crate::async_fuse::fuse::protocol::{FuseAttr, INum, FUSE_ROOT_ID};
 use crate::async_fuse::util;
 use crate::common::etcd_delegate::EtcdDelegate;
@@ -15,13 +16,14 @@ use nix::errno::Errno;
 use nix::fcntl::OFlag;
 use nix::sys::stat::SFlag;
 use nix::unistd;
+use parking_lot::RwLock as SyncRwLock;
 use std::collections::BTreeMap;
 use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock, RwLockWriteGuard};
-use crate::async_fuse::fuse::file_system::FsAsyncResultSender;
+use tokio::task::JoinHandle;
 
 /// The time-to-live seconds of FUSE attributes
 const MY_TTL_SEC: u64 = 3600; // TODO: should be a long value, say 1 hour
@@ -35,6 +37,7 @@ pub trait MetaData {
     type N: Node + Send + Sync + 'static;
 
     /// Create `MetaData`
+    #[allow(clippy::too_many_arguments)]
     async fn new(
         root_path: &str,
         capacity: usize,
@@ -43,8 +46,8 @@ pub trait MetaData {
         etcd_client: EtcdDelegate,
         node_id: &str,
         volume_info: &str,
-        async_result_sender:FsAsyncResultSender,
-    ) -> (Arc<Self>, Option<CacheServer>);
+        async_result_sender: FsAsyncResultSender,
+    ) -> (Arc<Self>, Option<CacheServer>, Vec<JoinHandle<()>>);
 
     /// Helper function to create node
     async fn create_node_helper(
@@ -115,6 +118,8 @@ pub struct DefaultMetaData {
     data_cache: Arc<GlobalCache>,
     /// Fuse fd
     fuse_fd: Mutex<RawFd>,
+    /// sender for async tasks to send msg(mainly refers to error) to session main loop
+    async_result_sender: FsAsyncResultSender,
 }
 
 #[async_trait]
@@ -129,7 +134,8 @@ impl MetaData for DefaultMetaData {
         _: EtcdDelegate,
         _: &str,
         _: &str,
-    ) -> (Arc<Self>, Option<CacheServer>) {
+        async_result_sender: FsAsyncResultSender,
+    ) -> (Arc<Self>, Option<CacheServer>, Vec<JoinHandle<()>>) {
         let root_path = Path::new(root_path)
             .canonicalize()
             .with_context(|| format!("failed to canonicalize the mount path={root_path:?}"))
@@ -145,6 +151,7 @@ impl MetaData for DefaultMetaData {
             cache: RwLock::new(BTreeMap::new()),
             data_cache: Arc::new(GlobalCache::new_with_capacity(capacity)),
             fuse_fd: Mutex::new(-1_i32),
+            async_result_sender,
         });
 
         let root_inode =
@@ -156,7 +163,7 @@ impl MetaData for DefaultMetaData {
                 });
         meta.cache.write().await.insert(FUSE_ROOT_ID, root_inode);
 
-        (meta, None)
+        (meta, None, Vec::new())
     }
 
     /// Get metadata cache
@@ -412,8 +419,8 @@ impl MetaData for DefaultMetaData {
         child_name: &str,
     ) -> anyhow::Result<(Duration, FuseAttr, u64)> {
         let pre_check_res = self.lookup_pre_check(parent, child_name).await;
-        let (ino, child_type) = match pre_check_res {
-            Ok((ino, child_type)) => (ino, child_type),
+        let (ino, child_type, file_attr) = match pre_check_res {
+            Ok((ino, child_type, file_attr)) => (ino, child_type, file_attr),
             Err(e) => {
                 debug!(
                     "lookup() failed to pre-check, the error is: {}",
@@ -427,13 +434,13 @@ impl MetaData for DefaultMetaData {
         {
             // cache hit
             let cache = self.cache.read().await;
-            if let Some(node) = cache.get(&ino) {
+            if let Some(_node) = cache.get(&ino) {
                 debug!(
                     "lookup_helper() cache hit when searching i-node of \
                         ino={} and name={:?} under parent ino={}",
                     ino, child_name, parent,
                 );
-                let attr = node.lookup_attr();
+                let attr = *file_attr.read();
                 let fuse_attr = fs_util::convert_to_fuse_attr(attr);
                 debug!(
                     "lookup_helper() successfully found in cache the i-node of \
@@ -458,22 +465,21 @@ impl MetaData for DefaultMetaData {
                 );
             });
             let parent_name = parent_node.get_name().to_owned();
+
             let child_node = match child_type {
-                SFlag::S_IFDIR => {
-                    parent_node
-                        .open_child_dir(child_name, None)
-                        .await
-                        .context(format!(
-                            "lookup_helper() failed to open sub-directory name={child_name:?} \
+                SFlag::S_IFDIR => parent_node
+                    .open_child_dir(child_name, &file_attr)
+                    .await
+                    .context(format!(
+                        "lookup_helper() failed to open sub-directory name={child_name:?} \
                             under parent directory of ino={parent} and name={parent_name:?}",
-                        ))?
-                }
+                    ))?,
                 SFlag::S_IFREG => {
                     let oflags = OFlag::O_RDWR;
                     parent_node
                         .open_child_file(
                             child_name,
-                            None,
+                            &file_attr,
                             oflags,
                             Arc::<GlobalCache>::clone(&self.data_cache),
                         )
@@ -484,7 +490,7 @@ impl MetaData for DefaultMetaData {
                         ))?
                 }
                 SFlag::S_IFLNK => parent_node
-                    .load_child_symlink(child_name, None)
+                    .load_child_symlink(child_name, &file_attr)
                     .await
                     .context(format!(
                         "lookup_helper() failed to read child symlink name={child_name:?} \
@@ -545,11 +551,8 @@ impl MetaData for DefaultMetaData {
                 replaced_entry.ino(),
                 "rename_exchange_helper() replaced entry i-number not match"
             );
-            let exchange_entry = DirEntry::new(
-                new_entry_ino,
-                old_name.to_owned(),
-                replaced_entry.entry_type(),
-            );
+            let exchange_entry =
+                DirEntry::new(old_name.to_owned(), replaced_entry.file_attr_arc_clone());
 
             // TODO: support thread-safe
             let mut cache = self.cache.write().await;
@@ -773,6 +776,8 @@ impl MetaData for DefaultMetaData {
             .write_file(fh, offset, data, o_flags, write_to_disk)
             .await
     }
+
+    async fn stop_all_async_tasks(&self) {}
 }
 
 impl DefaultMetaData {
@@ -898,7 +903,11 @@ impl DefaultMetaData {
     }
 
     /// Lookup helper function to pre-check
-    async fn lookup_pre_check(&self, parent: INum, name: &str) -> anyhow::Result<(INum, SFlag)> {
+    async fn lookup_pre_check(
+        &self,
+        parent: INum,
+        name: &str,
+    ) -> anyhow::Result<(INum, SFlag, Arc<SyncRwLock<FileAttr>>)> {
         // lookup child ino and type first
         let cache = self.cache.read().await;
         let parent_node = cache.get(&parent).unwrap_or_else(|| {
@@ -910,7 +919,7 @@ impl DefaultMetaData {
         if let Some(child_entry) = parent_node.get_entry(name) {
             let ino = child_entry.ino();
             let child_type = child_entry.entry_type();
-            Ok((ino, child_type))
+            Ok((ino, child_type, child_entry.file_attr_arc_clone()))
         } else {
             debug!(
                 "lookup_helper() failed to find the file name={:?} \
@@ -1037,9 +1046,7 @@ impl DefaultMetaData {
                 old_parent,
                 old_parent_node.get_name(),
             ),
-            Some(old_entry) => {
-                DirEntry::new(old_entry.ino(), new_name.to_owned(), old_entry.entry_type())
-            }
+            Some(old_entry) => DirEntry::new(new_name.to_owned(), old_entry.file_attr_arc_clone()),
         };
         node::rename_fullpath_recursive(entry_to_move.ino(), new_parent, &mut cache);
         let new_parent_node = cache.get_mut(&new_parent).unwrap_or_else(|| {

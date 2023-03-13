@@ -9,12 +9,15 @@ mod inode;
 /// fs metadata module
 mod metadata;
 mod node;
+/// persist logic for fs
+pub mod persist;
 /// fs metadata with S3 backend module
 mod s3_metadata;
 mod s3_node;
 /// S3 backend wrapper module
 pub mod s3_wrapper;
-pub mod persist;
+/// serial for communication and persist
+mod serial;
 
 use std::collections::BTreeMap;
 use std::os::unix::ffi::OsStringExt;
@@ -31,7 +34,7 @@ use nix::errno::Errno;
 use nix::sys::stat::SFlag;
 
 use crate::async_fuse::fuse::file_system;
-use crate::async_fuse::fuse::file_system::{FileSystem, FsAsyncResultReceiver, FsAsyncResultSender};
+use crate::async_fuse::fuse::file_system::{FileSystem, FsAsyncResultSender, FsUniqueController};
 use crate::async_fuse::fuse::fuse_reply::AsIoVec;
 use crate::async_fuse::fuse::fuse_reply::{
     ReplyAttr, ReplyBMap, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
@@ -60,7 +63,8 @@ pub struct MemFs<M: MetaData + Send + Sync + 'static> {
     #[allow(dead_code)]
     /// Cache server
     server: Option<CacheServer>,
-    async_result_sender:FsAsyncResultSender,
+    ///  Sender for async tasks to send msg(mainly refers to error) to session main loop
+    async_result_sender: FsAsyncResultSender,
 }
 
 /// Set attribute parameters
@@ -144,9 +148,9 @@ impl<M: MetaData + Send + Sync + 'static> MemFs<M> {
         etcd_client: EtcdDelegate,
         node_id: &str,
         volume_info: &str,
-    ) -> anyhow::Result<(Self,FsAsyncResultReceiver)> {
-        let (sender,receiver)=file_system::new_fs_async_result_chan();
-        let (metadata, server) = M::new(
+    ) -> anyhow::Result<(Self, FsUniqueController)> {
+        let (sender, receiver) = file_system::new_fs_async_result_chan();
+        let (metadata, server, join_handles) = M::new(
             mount_point,
             capacity,
             ip,
@@ -157,7 +161,14 @@ impl<M: MetaData + Send + Sync + 'static> MemFs<M> {
             sender.clone(),
         )
         .await;
-        Ok((Self { metadata, server, async_result_sender:sender },receiver))
+        Ok((
+            Self {
+                metadata,
+                server,
+                async_result_sender: sender,
+            },
+            FsUniqueController::new(receiver, join_handles),
+        ))
     }
 
     /// Read content check
@@ -1294,15 +1305,18 @@ impl<M: MetaData + Send + Sync + 'static> FileSystem for MemFs<M> {
         self.metadata.set_fuse_fd(fuse_fd).await;
     }
 
-    async fn send_fs_async_result(&self, result: anyhow::Result<()>) {
-        self.sender.send(result).await;
+    async fn send_async_result_2_main_loop(&self, result: anyhow::Result<()>) {
+        self.async_result_sender
+            .send(result)
+            .await
+            .unwrap_or_else(|e| {
+                // Should success because receiver is held by session main loop,
+                //  which is the last one to be dropped.
+                panic!("send async result 2 main loop failed, error:{e}")
+            });
     }
 
-    async fn recv_fs_async_result(&self) -> anyhow::Result<()> {
-        self.async_result_receiver.recv()
-    }
-
-    async fn stop_all_async_tasks(&self){
+    async fn stop_all_async_tasks(&self) {
         self.metadata.stop_all_async_tasks().await;
     }
 }

@@ -17,6 +17,7 @@ use nix::fcntl::{self, FcntlArg, OFlag};
 use nix::sys::stat::SFlag;
 use nix::sys::stat::{self, Mode};
 use nix::{sys::time::TimeSpec, unistd};
+use parking_lot::RwLock;
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
@@ -86,13 +87,13 @@ pub trait Node: Sized {
     async fn load_child_symlink(
         &self,
         child_symlink_name: &str,
-        remote: Option<FileAttr>,
+        file_attr: &Arc<RwLock<FileAttr>>,
     ) -> anyhow::Result<Self>;
     /// Open sub-directory in a directory
     async fn open_child_dir(
         &self,
         child_dir_name: &str,
-        remote: Option<FileAttr>,
+        file_attr: &Arc<RwLock<FileAttr>>,
     ) -> anyhow::Result<Self>;
     /// Create sub-directory in a directory
     async fn create_child_dir(
@@ -105,7 +106,7 @@ pub trait Node: Sized {
     async fn open_child_file(
         &self,
         child_file_name: &str,
-        remote: Option<FileAttr>,
+        file_attr: &Arc<RwLock<FileAttr>>,
         oflags: OFlag,
         global_cache: Arc<GlobalCache>,
     ) -> anyhow::Result<Self>;
@@ -177,7 +178,7 @@ pub struct DefaultNode {
     /// Full abstract path
     full_path: String,
     /// DefaultNode attribute
-    attr: FileAttr,
+    attr: Arc<RwLock<FileAttr>>,
     /// DefaultNode data
     data: DefaultNodeData,
     /// DefaultNode fd
@@ -199,7 +200,9 @@ impl Drop for DefaultNode {
             panic!(
                 "DefaultNode::drop() failed to clode the file handler \
                     of the node name={:?} ino={}, the error is: {}",
-                self.name, self.attr.ino, err,
+                self.name,
+                self.attr.read().ino,
+                err,
             );
         });
     }
@@ -211,7 +214,7 @@ impl DefaultNode {
         parent: u64,
         name: &str,
         full_path: String,
-        attr: FileAttr,
+        attr: Arc<RwLock<FileAttr>>,
         data: DefaultNodeData,
         fd: RawFd,
         meta: Arc<DefaultMetaData>,
@@ -465,7 +468,7 @@ impl DefaultNode {
             root_ino,
             name,
             "/".to_owned(),
-            attr,
+            Arc::new(RwLock::new(attr)),
             DefaultNodeData::Directory(BTreeMap::new()),
             dir_fd,
             meta,
@@ -491,7 +494,7 @@ impl Node for DefaultNode {
     /// Set node i-number
     #[inline]
     fn set_ino(&mut self, ino: INum) {
-        self.attr.ino = ino;
+        self.attr.write().ino = ino;
     }
 
     /// Get node fd
@@ -543,7 +546,7 @@ impl Node for DefaultNode {
     /// Get node attribute
     #[inline]
     fn get_attr(&self) -> FileAttr {
-        self.attr
+        *self.attr.read()
     }
 
     /// Set node attribute
@@ -554,7 +557,7 @@ impl Node for DefaultNode {
             DefaultNodeData::RegFile(..) => debug_assert_eq!(new_attr.kind, SFlag::S_IFREG),
             DefaultNodeData::SymLink(..) => debug_assert_eq!(new_attr.kind, SFlag::S_IFLNK),
         }
-        self.attr = new_attr;
+        self.attr.write().clone_from(&new_attr);
         old_attr
     }
 
@@ -689,7 +692,7 @@ impl Node for DefaultNode {
     /// check whether to load directory entry data or not
     fn need_load_dir_data(&self) -> bool {
         debug_assert_eq!(
-            self.attr.kind,
+            self.attr.read().kind,
             SFlag::S_IFDIR,
             "fobidden to check non-directory node need load data or not",
         );
@@ -699,12 +702,12 @@ impl Node for DefaultNode {
     /// Check whether to load file content data or not
     async fn need_load_file_data(&self, offset: usize, len: usize) -> bool {
         debug_assert_eq!(
-            self.attr.kind,
+            self.attr.read().kind,
             SFlag::S_IFREG,
             "fobidden to check non-file node need load data or not",
         );
 
-        if offset >= self.attr.size.cast() {
+        if offset >= self.attr.read().size.cast() {
             return false;
         }
 
@@ -768,24 +771,20 @@ impl Node for DefaultNode {
                 "create_child_symlink() failed to open symlink itself with name={child_symlink_name:?} \
                 under parent ino={ino}",
             ))?;
-        let child_attr = fs_util::load_attr(child_fd)
+        let child_attr = Arc::new(RwLock::new(fs_util::load_attr(child_fd)
             // let child_attr = util::load_symlink_attr(fd, child_symlink_name.clone())
             .await
             .context(format!(
                 "create_child_symlink() failed to get the attribute of the new symlink={child_symlink_name:?}",
-            ))?;
-        debug_assert_eq!(SFlag::S_IFLNK, child_attr.kind);
+            ))?));
+        debug_assert_eq!(SFlag::S_IFLNK, child_attr.read().kind);
 
         let target_path = {
             // insert new entry to parent directory
             // TODO: support thread-safe
             let previous_value = dir_data.insert(
                 child_symlink_name.to_owned(),
-                DirEntry::new(
-                    child_attr.ino,
-                    child_symlink_name.to_owned(),
-                    SFlag::S_IFLNK,
-                ),
+                DirEntry::new(child_symlink_name.to_owned(), Arc::clone(&child_attr)),
             );
             debug_assert!(previous_value.is_none()); // double check creation race
             target_path
@@ -810,7 +809,7 @@ impl Node for DefaultNode {
     async fn load_child_symlink(
         &self,
         child_symlink_name: &str,
-        _remote: Option<FileAttr>,
+        child_attr: &Arc<RwLock<FileAttr>>,
     ) -> anyhow::Result<Self> {
         let ino = self.get_ino();
         let fd = self.fd;
@@ -821,13 +820,14 @@ impl Node for DefaultNode {
             "load_child_symlink() failed to open symlink itself with name={child_symlink_name:?} \
                 under parent ino={ino}",
         ))?;
-        let child_attr = fs_util::load_attr(child_fd)
-            // let child_attr = util::load_symlink_attr(fd, child_symlink_name.clone())
+        let attr_data=fs_util::load_attr(child_fd)
+        // let child_attr = util::load_symlink_attr(fd, child_symlink_name.clone())
             .await
             .context(format!(
                 "load_child_symlink() failed to get the attribute of the new symlink={child_symlink_name:?}",
             ))?;
-        debug_assert_eq!(SFlag::S_IFLNK, child_attr.kind);
+        child_attr.write().clone_from(&attr_data);
+        debug_assert_eq!(SFlag::S_IFLNK, child_attr.read().kind);
 
         let target_path = {
             let child_symlink_name_string = child_symlink_name.to_owned();
@@ -849,7 +849,7 @@ impl Node for DefaultNode {
             self.get_ino(),
             child_symlink_name,
             full_path,
-            child_attr,
+            Arc::clone(child_attr),
             // DefaultNodeData::SymLink(Box::new(SymLinkData::new(child_fd, target_path).await)),
             DefaultNodeData::SymLink(target_path),
             child_fd,
@@ -861,7 +861,7 @@ impl Node for DefaultNode {
     async fn open_child_dir(
         &self,
         child_dir_name: &str,
-        _remote: Option<FileAttr>,
+        child_attr: &Arc<RwLock<FileAttr>>,
     ) -> anyhow::Result<Self> {
         let ino = self.get_ino();
         let fd = self.fd;
@@ -874,10 +874,11 @@ impl Node for DefaultNode {
             ))?;
 
         // get new directory attribute
-        let child_attr = fs_util::load_attr(child_raw_fd).await.context(format!(
+        let child_attr_data = fs_util::load_attr(child_raw_fd).await.context(format!(
             "open_child_dir() failed to get the attribute of the new child directory={child_dir_name:?}",
         ))?;
-        debug_assert_eq!(SFlag::S_IFDIR, child_attr.kind);
+        child_attr.write().clone_from(&child_attr_data);
+        debug_assert_eq!(SFlag::S_IFDIR, child_attr.read().kind);
 
         let mut full_path = self.full_path().to_owned();
         full_path.push_str(child_dir_name);
@@ -888,7 +889,7 @@ impl Node for DefaultNode {
             self.get_ino(),
             child_dir_name,
             full_path,
-            child_attr,
+            Arc::clone(child_attr),
             DefaultNodeData::Directory(BTreeMap::new()),
             child_raw_fd,
             Arc::clone(&self.meta),
@@ -929,16 +930,16 @@ impl Node for DefaultNode {
             ))?;
 
         // get new directory attribute
-        let child_attr = fs_util::load_attr(child_raw_fd).await.context(format!(
+        let child_attr = Arc::new(RwLock::new(fs_util::load_attr(child_raw_fd).await.context(format!(
             "open_child_dir_helper() failed to get the attribute of the new child directory={child_dir_name:?}",
-        ))?;
-        debug_assert_eq!(SFlag::S_IFDIR, child_attr.kind);
+        ))?));
+        debug_assert_eq!(SFlag::S_IFDIR, child_attr.read().kind);
 
         // insert new entry to parent directory
         // TODO: support thread-safe
         let previous_value = dir_data.insert(
             child_dir_name.to_owned(),
-            DirEntry::new(child_attr.ino, child_dir_name.to_owned(), SFlag::S_IFDIR),
+            DirEntry::new(child_dir_name.to_owned(), Arc::clone(&child_attr)),
         );
         debug_assert!(previous_value.is_none()); // double check creation race
 
@@ -965,7 +966,7 @@ impl Node for DefaultNode {
     async fn open_child_file(
         &self,
         child_file_name: &str,
-        _remote: Option<FileAttr>,
+        child_attr: &Arc<RwLock<FileAttr>>,
         oflags: OFlag,
         global_cache: Arc<GlobalCache>,
     ) -> anyhow::Result<Self> {
@@ -983,10 +984,11 @@ impl Node for DefaultNode {
         ))?;
 
         // get new file attribute
-        let child_attr = fs_util::load_attr(child_fd)
+        let child_attr_data = fs_util::load_attr(child_fd)
             .await
             .context("open_child_file() failed to get the attribute of the new child")?;
-        debug_assert_eq!(SFlag::S_IFREG, child_attr.kind);
+        child_attr.write().clone_from(&child_attr_data);
+        debug_assert_eq!(SFlag::S_IFREG, child_attr.read().kind);
 
         let mut full_path = self.full_path().to_owned();
         full_path.push_str(child_file_name);
@@ -995,7 +997,7 @@ impl Node for DefaultNode {
             self.get_ino(),
             child_file_name,
             full_path,
-            child_attr,
+            Arc::clone(child_attr),
             DefaultNodeData::RegFile(global_cache),
             child_fd,
             Arc::clone(&self.meta),
@@ -1030,16 +1032,17 @@ impl Node for DefaultNode {
         ))?;
 
         // get new file attribute
-        let child_attr = fs_util::load_attr(child_fd)
-            .await
-            .context("create_child_file() failed to get the attribute of the new child")?;
-        debug_assert_eq!(SFlag::S_IFREG, child_attr.kind);
+        let child_attr =
+            Arc::new(RwLock::new(fs_util::load_attr(child_fd).await.context(
+                "create_child_file() failed to get the attribute of the new child",
+            )?));
+        debug_assert_eq!(SFlag::S_IFREG, child_attr.read().kind);
 
         // insert new entry to parent directory
         // TODO: support thread-safe
         let previous_value = dir_data.insert(
             child_file_name.to_owned(),
-            DirEntry::new(child_attr.ino, child_file_name.to_owned(), SFlag::S_IFREG),
+            DirEntry::new(child_file_name.to_owned(), Arc::clone(&child_attr)),
         );
         debug_assert!(previous_value.is_none()); // double check creation race
 
@@ -1079,11 +1082,13 @@ impl Node for DefaultNode {
                 let aligned_offset = global_cache.round_down(offset);
                 let new_len_tmp =
                     global_cache.round_up(offset.overflow_sub(aligned_offset).overflow_add(len));
-
-                let new_len = if new_len_tmp.overflow_add(aligned_offset) > self.attr.size.cast() {
-                    self.attr.size.cast::<usize>().overflow_sub(aligned_offset)
-                } else {
-                    new_len_tmp
+                let new_len = {
+                    let attr = self.attr.read();
+                    if new_len_tmp.overflow_add(aligned_offset) > attr.size.cast() {
+                        attr.size.cast::<usize>().overflow_sub(aligned_offset)
+                    } else {
+                        new_len_tmp
+                    }
                 };
 
                 let file_data_vec = fs_util::load_file_data(self.get_fd(), aligned_offset, new_len)
@@ -1311,11 +1316,11 @@ impl Node for DefaultNode {
         }
 
         // update the attribute of the written file
-        self.attr.size = std::cmp::max(
-            self.attr.size,
+        self.attr.write().size = std::cmp::max(
+            self.attr.read().size,
             (offset.cast::<u64>()).overflow_add(written_size.cast()),
         );
-        debug!("file {:?} size = {:?}", self.name, self.attr.size);
+        debug!("file {:?} size = {:?}", self.name, self.attr.read().size);
         self.update_mtime_ctime_to_now();
 
         Ok(written_size)

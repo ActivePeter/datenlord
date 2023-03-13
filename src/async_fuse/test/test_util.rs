@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::async_fuse::fuse::{mount, session::Session};
 use crate::async_fuse::memfs;
 use crate::async_fuse::memfs::s3_wrapper::DoNothingImpl;
-
+use crate::async_fuse::FsUniqueController;
 /*
 pub const TEST_BUCKET_NAME: &str = "fuse-test-bucket";
 pub const TEST_ENDPOINT: &str = "http://127.0.0.1:9000";
@@ -41,7 +41,10 @@ pub async fn setup(mount_dir: &Path, is_s3: bool) -> anyhow::Result<tokio::task:
         async fn run_fs(mount_point: &Path, is_s3: bool) -> anyhow::Result<()> {
             let etcd_delegate = EtcdDelegate::new(vec![TEST_ETCD_ENDPOINT.to_owned()]).await?;
             if is_s3 {
-                let fs: memfs::MemFs<memfs::S3MetaData<DoNothingImpl>> = memfs::MemFs::new(
+                let (fs, fs_unique_controller): (
+                    memfs::MemFs<memfs::S3MetaData<DoNothingImpl>>,
+                    FsUniqueController,
+                ) = memfs::MemFs::new(
                     TEST_VOLUME_INFO,
                     CACHE_DEFAULT_CAPACITY,
                     TEST_NODE_IP,
@@ -51,10 +54,13 @@ pub async fn setup(mount_dir: &Path, is_s3: bool) -> anyhow::Result<tokio::task:
                     TEST_VOLUME_INFO,
                 )
                 .await?;
-                let ss = Session::new(mount_point, fs).await?;
+                let ss = Session::new(mount_point, fs, fs_unique_controller).await?;
                 ss.run().await?;
             } else {
-                let fs: memfs::MemFs<memfs::DefaultMetaData> = memfs::MemFs::new(
+                let (fs, fs_unique_controller): (
+                    memfs::MemFs<memfs::DefaultMetaData>,
+                    FsUniqueController,
+                ) = memfs::MemFs::new(
                     mount_point
                         .as_os_str()
                         .to_str()
@@ -67,7 +73,7 @@ pub async fn setup(mount_dir: &Path, is_s3: bool) -> anyhow::Result<tokio::task:
                     TEST_VOLUME_INFO,
                 )
                 .await?;
-                let ss = Session::new(mount_point, fs).await?;
+                let ss = Session::new(mount_point, fs, fs_unique_controller).await?;
                 ss.run().await?;
             };
 

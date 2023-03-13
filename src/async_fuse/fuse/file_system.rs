@@ -13,6 +13,7 @@ use std::os::unix::io::RawFd;
 use std::path::Path;
 
 use async_trait::async_trait;
+use tokio::task::JoinHandle;
 
 /// FUSE filesystem trait
 #[async_trait]
@@ -285,18 +286,59 @@ pub trait FileSystem {
     async fn set_fuse_fd(&self, fuse_fd: RawFd);
 
     /// Send fs async result by async tasks like persist task.
-    async fn send_fs_async_result(&self, result: anyhow::Result<()>);
-
-    /// Receive fs async result
-    async fn recv_fs_async_result(&self) -> anyhow::Result<()>;
+    async fn send_async_result_2_main_loop(&self, result: anyhow::Result<()>);
 
     /// Stop all async tasks
     async fn stop_all_async_tasks(&self);
 }
 
-pub(crate) fn new_fs_async_result_chan()->(FsAsyncResultSender,FsAsyncResultReceiver){
+/// create channel of communication from async task to main loop
+pub(crate) fn new_fs_async_result_chan() -> (FsAsyncResultSender, FsAsyncResultReceiver) {
     tokio::sync::mpsc::channel(10)
 }
-pub(crate) type FsAsyncResult= anyhow::Result<()>;
-pub(crate) type FsAsyncResultSender= tokio::sync::mpsc::Sender<anyhow::Result<()>>;
-pub(crate) type FsAsyncResultReceiver= tokio::sync::mpsc::Receiver<anyhow::Result<()>>;
+/// result of fs async result
+pub type FsAsyncResult = anyhow::Result<()>;
+/// sender for async tasks to send msg(mainly refers to error) to session main loop
+pub type FsAsyncResultSender = tokio::sync::mpsc::Sender<FsAsyncResult>;
+/// receiver to receive msg from async tasks
+pub(crate) type FsAsyncResultReceiver = tokio::sync::mpsc::Receiver<FsAsyncResult>;
+/// Some state held by session to communicate with and control the fs.
+#[allow(missing_debug_implementations)]
+pub struct FsUniqueController {
+    /// channel to receive async task msg
+    async_res_receiver: FsAsyncResultReceiver,
+    /// all async task handles to join when session deref (the end of main loop)
+    async_task_join_handles: Vec<JoinHandle<()>>,
+}
+impl FsUniqueController {
+    /// new `FsUniqueController`
+    ///  pass in the join handle and msg receiver,
+    ///  which should be owned by main loop
+    pub(crate) fn new(
+        async_res_receiver: FsAsyncResultReceiver,
+        async_task_join_handles: Vec<JoinHandle<()>>,
+    ) -> FsUniqueController {
+        FsUniqueController {
+            async_res_receiver,
+            async_task_join_handles,
+        }
+    }
+    /// before calling this, make sure just all task will break their loop.
+    pub(crate) async fn join_all_async_tasks(&mut self) {
+        while let Some(task) = self.async_task_join_handles.pop() {
+            task.await
+                .unwrap_or_else(|e| panic!("join async task error {e}"));
+        }
+    }
+    /// async read a result from async task
+    pub(crate) async fn recv_async_task_res(&mut self) -> anyhow::Result<()> {
+        if let Some(res) = self.async_res_receiver.recv().await {
+            res
+        } else {
+            // Only happens when channel sender destroyed,
+            //  but channel sender destroyed when Session drop,
+            //  so this only happens when there's a logic bug.
+            panic!("fs async task channel was destroyed unexpectedly")
+        }
+    }
+}

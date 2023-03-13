@@ -5,18 +5,20 @@ compile_error!("async-fuse does not support this target now");
 
 use crate::async_fuse::util::{clear_errno, cstr_to_bytes, errno, nix_to_io_error, with_c_str};
 
+use parking_lot::RwLock;
 use std::io;
 use std::iter::FusedIterator;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::RawFd;
 use std::path::Path;
 use std::ptr::NonNull;
+use std::sync::Arc;
 
+use crate::async_fuse::memfs::fs_util::FileAttr;
 use libc::ino_t;
 use memchr::memchr;
 use nix::fcntl::OFlag;
 use nix::sys::stat::{Mode, SFlag};
-use crate::async_fuse::memfs::fs_util::FileAttr;
 
 /// Directory meta-data
 pub struct Dir(NonNull<libc::DIR>);
@@ -116,21 +118,18 @@ impl IntoIterator for Dir {
 pub struct DirEntry {
     /// The entry name
     name: String,
-    file_attr:FileAttr
+    /// File Attribute shared between parent dir node and child node
+    file_attr: Arc<RwLock<FileAttr>>,
 }
 
 impl DirEntry {
     /// Create `DirEntry`
-    pub const fn new(name: String,
-                     file_attr:FileAttr) -> Self {
-        Self {
-            name,
-            file_attr,
-        }
+    pub const fn new(name: String, file_attr: Arc<RwLock<FileAttr>>) -> Self {
+        Self { name, file_attr }
     }
     /// Returns the inode number (`d_ino`) of the underlying `dirent`.
-    pub const fn ino(&self) -> ino_t {
-        self.file_attr.ino
+    pub fn ino(&self) -> ino_t {
+        self.file_attr.read().ino
     }
 
     /// Returns the bare file name of this directory entry without any other leading path component.
@@ -143,8 +142,18 @@ impl DirEntry {
     /// See platform `readdir(3)` or `dirent(5)` manpage for when the file type is known;
     /// notably, some Linux filesystems don't implement this. The caller should use `stat` or
     /// `fstat` if this returns `None`.
-    pub const fn entry_type(&self) -> SFlag {
-        self.file_attr.kind
+    pub fn entry_type(&self) -> SFlag {
+        self.file_attr.read().kind
+    }
+
+    /// get clone of `file_attr` arc
+    pub fn file_attr_arc_clone(&self) -> Arc<RwLock<FileAttr>> {
+        Arc::clone(&self.file_attr)
+    }
+
+    /// get ref of `file_attr` arc
+    pub fn file_attr_arc_ref(&self) -> &Arc<RwLock<FileAttr>> {
+        &self.file_attr
     }
 
     /// Build `DirEntry` from `libc::dirent64`
@@ -173,10 +182,15 @@ impl DirEntry {
             /* libc::DT_UNKNOWN | */ _ => panic!("failed to recognize file type"),
         };
 
+        // This file attr is incomplete for local fs.
+        //  Currently the system uses s3 for production environment.
+        let mut file_attr = FileAttr::now();
+        file_attr.ino = ino;
+        file_attr.kind = entry_type;
+
         Self {
-            ino,
-            entry_type,
             name,
+            file_attr: Arc::new(RwLock::new(file_attr)),
         }
     }
 }
