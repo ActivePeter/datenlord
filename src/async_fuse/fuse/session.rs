@@ -254,6 +254,7 @@ impl Session {
                     if !handle_fuse_request_res(res, byte_buffer){
                         break;
                     }
+                    read_fuse_task=None;
                 }
                 res = self.fs_unique_controller.recv_async_task_res() => {
                     handle_fs_async_result(res);
