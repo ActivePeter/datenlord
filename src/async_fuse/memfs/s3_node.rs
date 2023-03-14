@@ -28,6 +28,9 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::RwLockWriteGuard;
 
+// /// Block size constant
+// const BLOCK_SIZE: usize = 1024;
+
 /// A file node data or a directory node data
 #[derive(Debug)]
 pub enum S3NodeData {
@@ -634,7 +637,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
         }
 
         // get symbol file attribute
-        let child_attr = FileAttr {
+        let child_attr = Arc::new(RwLock::new(FileAttr {
             ino: inum,
             kind: SFlag::S_IFLNK,
             size: target_path
@@ -681,34 +684,34 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
     ) -> anyhow::Result<Self> {
         let absolute_path = self.absolute_path_with_child(child_symlink_name);
 
-        let child_attr = match remote {
-            None => {
-                let (len, last_modified) = self
-                    .s3_backend
-                    .get_meta(absolute_path.as_str())
-                    .await
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "failed to get meta of {absolute_path:?} from s3 backend, error is {e:?}"
-                        )
-                    });
-                // get symbol file attribute
-                FileAttr {
-                    ino: 0,
-                    kind: SFlag::S_IFLNK,
-                    size: len.cast(),
-                    blocks: 0,
-                    perm: 0o777,
-                    atime: last_modified,
-                    mtime: last_modified,
-                    ctime: last_modified,
-                    crtime: last_modified,
-                    ..FileAttr::default()
-                }
-            }
-            Some(attr) => attr,
-        };
-        debug_assert_eq!(SFlag::S_IFLNK, child_attr.kind);
+        // let child_attr = match remote {
+        //     None => {
+        //         let (len, last_modified) = self
+        //             .s3_backend
+        //             .get_meta(absolute_path.as_str())
+        //             .await
+        //             .unwrap_or_else(|e| {
+        //                 panic!(
+        //                     "failed to get meta of {absolute_path:?} from s3 backend, error is {e:?}"
+        //                 )
+        //             });
+        //         // get symbol file attribute
+        //         FileAttr {
+        //             ino: 0,
+        //             kind: SFlag::S_IFLNK,
+        //             size: len.cast(),
+        //             blocks: 0,
+        //             perm: 0o777,
+        //             atime: last_modified,
+        //             mtime: last_modified,
+        //             ctime: last_modified,
+        //             crtime: last_modified,
+        //             ..FileAttr::default()
+        //         }
+        //     }
+        //     Some(attr) => attr,
+        // };
+        // debug_assert_eq!(SFlag::S_IFLNK, child_attr.read().kind);
 
         let target_path = PathBuf::from(
             String::from_utf8(
@@ -741,30 +744,30 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
         child_dir_name: &str,
         child_attr: Arc<RwLock<FileAttr>>,
     ) -> anyhow::Result<Self> {
-        let absolute_path = self.absolute_dir_with_child(child_dir_name);
+        // let absolute_path = self.absolute_dir_with_child(child_dir_name);
 
-        // get new directory attribute
-        let child_attr = match remote {
-            None => {
-                let last_modified = self
-                    .s3_backend
-                    .get_last_modified(absolute_path.as_str())
-                    .await
-                    .unwrap_or_else(|e| panic!("failed to get last modified of file {absolute_path:?} from s3 backend, error is {e:?}"));
-                FileAttr {
-                    ino: 0, // will be set later
-                    kind: SFlag::S_IFDIR,
-                    atime: last_modified,
-                    mtime: last_modified,
-                    ctime: last_modified,
-                    crtime: last_modified,
-                    ..FileAttr::default()
-                }
-            }
-            Some(attr) => attr,
-        };
+        // // get new directory attribute
+        // let child_attr = match remote {
+        //     None => {
+        //         let last_modified = self
+        //             .s3_backend
+        //             .get_last_modified(absolute_path.as_str())
+        //             .await
+        //             .unwrap_or_else(|e| panic!("failed to get last modified of file {absolute_path:?} from s3 backend, error is {e:?}"));
+        //         FileAttr {
+        //             ino: 0, // will be set later
+        //             kind: SFlag::S_IFDIR,
+        //             atime: last_modified,
+        //             mtime: last_modified,
+        //             ctime: last_modified,
+        //             crtime: last_modified,
+        //             ..FileAttr::default()
+        //         }
+        //     }
+        //     Some(attr) => attr,
+        // };
 
-        debug_assert_eq!(SFlag::S_IFDIR, child_attr.kind);
+        // debug_assert_eq!(SFlag::S_IFDIR, child_attr.read().kind);
 
         // lookup count and open count are increased to 1 by creation
         let full_path = format!("{}{}/", self.full_path, child_dir_name);
@@ -801,7 +804,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
         }
 
         // get new directory attribute
-        let child_attr = FileAttr {
+        let child_attr = Arc::new(RwLock::new(FileAttr {
             ino: inum,
             kind: SFlag::S_IFDIR,
             perm: fs_util::parse_mode_bits(mode.bits()),
@@ -842,37 +845,38 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
         global_cache: Arc<GlobalCache>,
     ) -> anyhow::Result<Self> {
         // get new file attribute
-        let absolute_path = self.absolute_path_with_child(child_file_name);
-        let child_attr = match remote {
-            None => {
-                let (content_len, last_modified) = self
-                    .s3_backend
-                    .get_meta(absolute_path.as_str())
-                    .await
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "failed to get meta of {absolute_path:?} from s3 backend, error is {e:?}"
-                        )
-                    });
-                FileAttr {
-                    ino: 0, // will be set later
-                    kind: SFlag::S_IFREG,
-                    size: content_len.cast(),
-                    blocks: content_len
-                        .overflow_add(BLOCK_SIZE)
-                        .overflow_sub(1)
-                        .overflow_div(BLOCK_SIZE)
-                        .cast(),
-                    atime: last_modified,
-                    mtime: last_modified,
-                    ctime: last_modified,
-                    crtime: last_modified,
-                    ..FileAttr::default()
-                }
-            }
-            Some(attr) => attr,
-        };
-        debug_assert_eq!(SFlag::S_IFREG, child_attr.kind);
+        // let absolute_path = self.absolute_path_with_child(child_file_name);
+        // todo: why load attr from remote?
+        // let child_attr = match remote {
+        //     None => {
+        //         let (content_len, last_modified) = self
+        //             .s3_backend
+        //             .get_meta(absolute_path.as_str())
+        //             .await
+        //             .unwrap_or_else(|e| {
+        //                 panic!(
+        //                     "failed to get meta of {absolute_path:?} from s3 backend, error is {e:?}"
+        //                 )
+        //             });
+        //         FileAttr {
+        //             ino: 0, // will be set later
+        //             kind: SFlag::S_IFREG,
+        //             size: content_len.cast(),
+        //             blocks: content_len
+        //                 .overflow_add(BLOCK_SIZE)
+        //                 .overflow_sub(1)
+        //                 .overflow_div(BLOCK_SIZE)
+        //                 .cast(),
+        //             atime: last_modified,
+        //             mtime: last_modified,
+        //             ctime: last_modified,
+        //             crtime: last_modified,
+        //             ..FileAttr::default()
+        //         }
+        //     }
+        //     Some(attr) => attr,
+        // };
+        // debug_assert_eq!(SFlag::S_IFREG, child_attr.kind);
 
         Ok(Self::new(
             self.get_ino(),
@@ -910,7 +914,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
         }
 
         // get new file attribute
-        let child_attr = FileAttr {
+        let child_attr = Arc::new(RwLock::new(FileAttr {
             ino: inum,
             kind: SFlag::S_IFREG,
             perm: fs_util::parse_mode_bits(mode.bits()),
@@ -1189,7 +1193,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
             );
         }
 
-        debug!("file {:?} size = {:?}", self.name, self.attr.size);
+        debug!("file {:?} size = {:?}", self.name, self.attr.read().size);
         self.update_mtime_ctime_to_now();
 
         Ok(written_size)
