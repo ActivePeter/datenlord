@@ -306,7 +306,7 @@ pub(crate) type FsAsyncResultReceiver = tokio::sync::mpsc::Receiver<FsAsyncResul
 #[allow(missing_debug_implementations)]
 pub struct FsUniqueController {
     /// channel to receive async task msg
-    async_res_receiver: FsAsyncResultReceiver,
+    _async_res_receiver: FsAsyncResultReceiver,
     /// all async task handles to join when session deref (the end of main loop)
     async_task_join_handles: Vec<JoinHandle<()>>,
 }
@@ -319,7 +319,7 @@ impl FsUniqueController {
         async_task_join_handles: Vec<JoinHandle<()>>,
     ) -> FsUniqueController {
         FsUniqueController {
-            async_res_receiver,
+            _async_res_receiver:async_res_receiver,
             async_task_join_handles,
         }
     }
@@ -330,15 +330,16 @@ impl FsUniqueController {
                 .unwrap_or_else(|e| panic!("join async task error {e}"));
         }
     }
-    /// async read a result from async task
-    pub(crate) async fn recv_async_task_res(&mut self) -> anyhow::Result<()> {
-        if let Some(res) = self.async_res_receiver.recv().await {
-            res
-        } else {
-            // Only happens when channel sender destroyed,
-            //  but channel sender destroyed when Session drop,
-            //  so this only happens when there's a logic bug.
-            panic!("fs async task channel was destroyed unexpectedly")
-        }
-    }
+    // async read a result from async task
+    // #[allow(dead_code)]
+    // pub(crate) async fn recv_async_task_res(&mut self) -> anyhow::Result<()> {
+    //     if let Some(res) = self.async_res_receiver.recv().await {
+    //         res
+    //     } else {
+    //         // Only happens when channel sender destroyed,
+    //         //  but channel sender destroyed when Session drop,
+    //         //  so this only happens when there's a logic bug.
+    //         panic!("fs async task channel was destroyed unexpectedly")
+    //     }
+    // }
 }
