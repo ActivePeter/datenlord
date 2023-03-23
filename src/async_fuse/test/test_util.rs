@@ -1,3 +1,4 @@
+use crate::async_fuse::fuse::file_system;
 use crate::common::etcd_delegate::EtcdDelegate;
 use log::{debug, info}; // warn, error
 use std::fs;
@@ -55,7 +56,7 @@ pub async fn setup(mount_dir: &Path, is_s3: bool) -> anyhow::Result<tokio::task:
                 let ss = Session::new(mount_point, fs,fs_ctrl).await?;
                 ss.run().await?;
             } else {
-                let (fs,fs_ctrl): (memfs::MemFs<memfs::S3MetaData<DefaultMetaData>>,
+                let (fs,fs_ctrl): (memfs::MemFs<DefaultMetaData>,
                     file_system::FsController)  = memfs::MemFs::new(
                     mount_point
                         .as_os_str()

@@ -93,7 +93,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
     ) -> (Arc<Self>, Option<CacheServer>, Vec<JoinHandle<()>>) {
         let (bucket_name, endpoint, access_key, secret_key) = parse_s3_info(s3_info);
         let s3_backend = Arc::new(
-            match S::new(bucket_name, endpoint, access_key, secret_key).await {
+            match S::new_backend(bucket_name, endpoint, access_key, secret_key).await {
                 Ok(s) => s,
                 Err(e) => panic!("{e:?}"),
             },
