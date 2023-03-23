@@ -10,6 +10,7 @@ use clippy_utilities::OverflowArithmetic;
 use log::debug;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::sync::atomic::Ordering::Acquire;
@@ -21,6 +22,7 @@ use std::{
 };
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
+
 
 /// Dir prefix for s3 storage bucket key
 const DIR_DATA_KEY_PREFIX: &str = "dir_";
@@ -88,6 +90,25 @@ impl PersistDirContent {
         match self.persist_serialized.root_attr.as_ref() {
             Some(attr) => Ok(serial::serial_to_file_attr(attr)),
             None => Err(anyhow::Error::from(PersistError::FileAttrMissingForRoot)),
+        }
+    }
+
+    pub(crate) fn new_from_cache(dir_full_path:String,files:&BTreeMap<String, DirEntry>,f_attr: SerialFileAttr)
+        ->PersistDirContent{
+        let root_attr=if dir_full_path=="/" {
+            Some(f_attr)
+        }else{
+            None
+        };
+
+        PersistDirContent{
+            dir_full_path,
+            persist_serialized: PersistSerializePart{
+                file_map:files.iter().map(|(fname,entry)|{
+                    (fname.clone(),serial::file_attr_to_serial(&entry.file_attr_arc_ref().read()))
+                }).collect() ,
+                root_attr , 
+            },
         }
     }
 
