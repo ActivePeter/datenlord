@@ -204,7 +204,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
         target_path: Option<&Path>,
     ) -> anyhow::Result<(Duration, FuseAttr, u64)> {
         // pre-check
-        let ( full_path, fuse_attr) = {
+        let ( parent_full_path,full_path, new_node_attr, fuse_attr) = {
             let mut cache = self.cache.write().await;
             let parent_node = Self::create_node_pre_check(parent, node_name, &mut cache)
                 .context("create_node_helper() failed to pre check")?;
@@ -307,21 +307,27 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
             let pnode = cache.get(&parent).unwrap_or_else(|| {
                 panic!("failed to get parent inode {parent:?}, parent name {parent_name:?}")
             });
-            let parent_full_path=pnode.full_path().to_owned();
-            self.sync_attr_remote(&parent_full_path).await;
-            self.sync_dir_remote(&parent_full_path, node_name, &new_node_attr, target_path)
-                .await;
-            // After sync to other，we should do async persist
-            self.persist_handle.mark_dirty(parent, PersistDirContent::new_from_cache(
-                parent_full_path, pnode.get_dir_data(), serial::file_attr_to_serial(&pnode.get_attr())));
+            // let parent_full_path=pnode.full_path().to_owned();
+            
             (
-                // pnode.full_path().to_owned(),
+                pnode.full_path().to_owned(),
                 full_path,
-                // new_node_attr,
+                new_node_attr,
                 fuse_attr,
             )
         };
-
+        {
+            self.sync_attr_remote(&parent_full_path).await;
+            self.sync_dir_remote(&parent_full_path, node_name, &new_node_attr, target_path)
+                .await;
+            let cache = self.cache.read().await;
+            let pnode = cache.get(&parent).unwrap_or_else(|| {
+                panic!("failed to get parent inode {parent:?}")
+            });
+            // After sync to other，we should do async persist
+            self.persist_handle.mark_dirty(parent, PersistDirContent::new_from_cache(
+                parent_full_path, pnode.get_dir_data(), serial::file_attr_to_serial(&pnode.get_attr())));
+        }
         // self.sync_attr_remote(&parent_full_path).await;
         // self.sync_dir_remote(&parent_full_path, node_name, &child_attr, target_path)
         //     .await;
