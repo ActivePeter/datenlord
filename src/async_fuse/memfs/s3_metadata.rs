@@ -315,6 +315,12 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
             self.sync_attr_remote(&parent_full_path).await;
             self.sync_dir_remote(&parent_full_path, node_name, &new_node_attr, target_path)
                 .await;
+            let cache = self.cache.read().await;
+            let pnode = cache.get(&parent).unwrap_or_else(|| {
+                panic!(
+                    "failed to get parent inode {parent:?}, parent fullpath {parent_full_path:?}"
+                )
+            });
             // After sync to other，we should do async persist
             self.persist_handle.mark_dirty(
                 parent,
