@@ -327,7 +327,7 @@ impl FsController {
                 .unwrap_or_else(|e| panic!("join async task error {e}"));
         }
     }
-    // async read a result from async task
+    /// async read a result from async task
     pub(crate) async fn recv_async_task_res(&mut self) -> anyhow::Result<()> {
         if let Some(res) = self.async_res_receiver.recv().await {
             res
