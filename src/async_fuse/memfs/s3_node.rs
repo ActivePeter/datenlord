@@ -5,6 +5,7 @@ use super::dir::DirEntry;
 use super::dist::client as dist_client;
 use super::fs_util::{self, FileAttr};
 use super::node::Node;
+use super::persist;
 use super::s3_metadata::S3MetaData;
 use super::s3_wrapper::S3BackEnd;
 use super::SetAttrParam;
@@ -27,6 +28,9 @@ use std::sync::atomic::{self, AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::RwLockWriteGuard;
+
+// /// Block size constant
+// const BLOCK_SIZE: usize = 1024;
 
 /// A file node data or a directory node data
 #[derive(Debug)]
@@ -264,34 +268,60 @@ impl<S: S3BackEnd + Send + Sync + 'static> S3Node<S> {
 
     /// Open root node
     #[allow(clippy::unnecessary_wraps)]
-    pub(crate) fn open_root_node(
+    pub(crate) async fn open_root_node(
         root_ino: INum,
         name: &str,
         s3_backend: Arc<S>,
         meta: Arc<S3MetaData<S>>,
     ) -> anyhow::Result<Self> {
-        let now = SystemTime::now();
-        let attr = Arc::new(RwLock::new(FileAttr {
-            ino: root_ino,
-            atime: now,
-            mtime: now,
-            ctime: now,
-            crtime: now,
-            kind: SFlag::S_IFDIR,
-            ..FileAttr::default()
-        }));
+        match persist::read_persisted_dir(&s3_backend, "/".to_owned()).await {
+            Err(e) => {
+                //todo: handle different type of error, key not exist, net err, etc.
+                debug!("read persit dir error {e}");
 
-        let root_node = Self::new(
-            root_ino,
-            name,
-            "/".to_owned(),
-            attr,
-            S3NodeData::Directory(BTreeMap::new()),
-            s3_backend,
-            meta,
-        );
+                let now = SystemTime::now();
+                let attr = Arc::new(RwLock::new(FileAttr {
+                    ino: root_ino,
+                    atime: now,
+                    mtime: now,
+                    ctime: now,
+                    crtime: now,
+                    kind: SFlag::S_IFDIR,
+                    ..FileAttr::default()
+                }));
 
-        Ok(root_node)
+                let root_node = Self::new(
+                    root_ino,
+                    name,
+                    "/".to_owned(),
+                    attr,
+                    S3NodeData::Directory(BTreeMap::new()),
+                    s3_backend,
+                    meta,
+                );
+
+                Ok(root_node)
+            }
+            Ok(data) => match data.try_get_root_attr() {
+                Ok(attr) => {
+                    let root_node = Self::new(
+                        root_ino,
+                        name,
+                        "/".to_owned(),
+                        Arc::new(RwLock::new(attr)),
+                        data.new_s3_node_data_dir(),
+                        s3_backend,
+                        meta,
+                    );
+
+                    Ok(root_node)
+                }
+                Err(e) => {
+                    log::error!("root node persist lack of attr info {e}");
+                    Err(e)
+                }
+            },
+        }
     }
 
     /// flush all data of a node
@@ -299,14 +329,16 @@ impl<S: S3BackEnd + Send + Sync + 'static> S3Node<S> {
         if self.is_deferred_deletion() {
             return Ok(());
         }
-        let data_cache = match self.data {
-            S3NodeData::RegFile(ref data_cache) => Arc::<GlobalCache>::clone(data_cache),
-            // Do nothing for Directory.
-            // TODO: Sync dir data to S3 storage
-            S3NodeData::Directory(..) => return Ok(()),
+        let data_cache=match self.data {
+            S3NodeData::RegFile(ref data_cache) => {
+                Arc::clone(data_cache)
+            },
+            S3NodeData::Directory(..) => {
+                self.meta.persist_handle.wait_persist(self.get_ino()).await;
+                return Ok(());
+            },
             S3NodeData::SymLink(..) => panic!("forbidden to flush data for link"),
         };
-
         let size = self.attr.read().size;
         if self.need_load_file_data(0, size.cast()).await {
             let load_res = self.load_data(0, size.cast()).await;
@@ -326,7 +358,7 @@ impl<S: S3BackEnd + Send + Sync + 'static> S3Node<S> {
                 data_cache.get_file_cache(self.full_path.as_bytes(), 0, size.cast()),
             )
             .await?;
-
+        
         Ok(())
     }
 }
@@ -681,6 +713,35 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
     ) -> anyhow::Result<Self> {
         let absolute_path = self.absolute_path_with_child(child_symlink_name);
 
+        // let child_attr = match remote {
+        //     None => {
+        //         let (len, last_modified) = self
+        //             .s3_backend
+        //             .get_meta(absolute_path.as_str())
+        //             .await
+        //             .unwrap_or_else(|e| {
+        //                 panic!(
+        //                     "failed to get meta of {absolute_path:?} from s3 backend, error is {e:?}"
+        //                 )
+        //             });
+        //         // get symbol file attribute
+        //         FileAttr {
+        //             ino: 0,
+        //             kind: SFlag::S_IFLNK,
+        //             size: len.cast(),
+        //             blocks: 0,
+        //             perm: 0o777,
+        //             atime: last_modified,
+        //             mtime: last_modified,
+        //             ctime: last_modified,
+        //             crtime: last_modified,
+        //             ..FileAttr::default()
+        //         }
+        //     }
+        //     Some(attr) => attr,
+        // };
+        // debug_assert_eq!(SFlag::S_IFLNK, child_attr.read().kind);
+
         let target_path = PathBuf::from(
             String::from_utf8(
                 self.s3_backend
@@ -715,12 +776,23 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
         // lookup count and open count are increased to 1 by creation
         let full_path = format!("{}{}/", self.full_path, child_dir_name);
 
+        let dirdata=match persist::read_persisted_dir(&self.s3_backend, full_path.clone()).await{
+            Ok(dir)=>{
+                dir.new_s3_node_data_dir()
+            }
+            Err(e)=>{
+                debug!("failed to get dir data from s3, path:{full_path}, err:{e}");
+                // dir data not persisted init with empty
+                S3NodeData::Directory(BTreeMap::new())
+            }
+        };
+
         let child_node = Self::new(
             self.get_ino(),
             child_dir_name,
             full_path,
             child_attr,
-            S3NodeData::Directory(BTreeMap::new()),
+            dirdata,
             Arc::clone(&self.s3_backend),
             Arc::clone(&self.meta),
         );
@@ -787,6 +859,40 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
         _oflags: OFlag,
         global_cache: Arc<GlobalCache>,
     ) -> anyhow::Result<Self> {
+        // get new file attribute
+        // let absolute_path = self.absolute_path_with_child(child_file_name);
+        // todo: why load attr from remote?
+        // let child_attr = match remote {
+        //     None => {
+        //         let (content_len, last_modified) = self
+        //             .s3_backend
+        //             .get_meta(absolute_path.as_str())
+        //             .await
+        //             .unwrap_or_else(|e| {
+        //                 panic!(
+        //                     "failed to get meta of {absolute_path:?} from s3 backend, error is {e:?}"
+        //                 )
+        //             });
+        //         FileAttr {
+        //             ino: 0, // will be set later
+        //             kind: SFlag::S_IFREG,
+        //             size: content_len.cast(),
+        //             blocks: content_len
+        //                 .overflow_add(BLOCK_SIZE)
+        //                 .overflow_sub(1)
+        //                 .overflow_div(BLOCK_SIZE)
+        //                 .cast(),
+        //             atime: last_modified,
+        //             mtime: last_modified,
+        //             ctime: last_modified,
+        //             crtime: last_modified,
+        //             ..FileAttr::default()
+        //         }
+        //     }
+        //     Some(attr) => attr,
+        // };
+        // debug_assert_eq!(SFlag::S_IFREG, child_attr.kind);
+
         Ok(Self::new(
             self.get_ino(),
             child_file_name,
@@ -1104,6 +1210,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
 
         debug!("file {:?} size = {:?}", self.name, self.attr.read().size);
         self.update_mtime_ctime_to_now();
+        //FileAttr changed, remember to persist the directory after calling this fn
 
         Ok(written_size)
     }
