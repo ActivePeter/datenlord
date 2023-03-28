@@ -774,11 +774,9 @@ impl<S: S3BackEnd + Sync + Send + 'static> Node for S3Node<S> {
         // lookup count and open count are increased to 1 by creation
         let full_path = format!("{}{}/", self.full_path, child_dir_name);
 
-        let dirdata=match persist::read_persisted_dir(&self.s3_backend, full_path.clone()).await{
-            Ok(dir)=>{
-                dir.new_s3_node_data_dir()
-            }
-            Err(e)=>{
+        let dirdata = match persist::read_persisted_dir(&self.s3_backend, full_path.clone()).await {
+            Ok(dir) => dir.new_s3_node_data_dir(),
+            Err(e) => {
                 debug!("failed to get dir data from s3, path:{full_path}, err:{e}");
                 // dir data not persisted init with empty
                 S3NodeData::Directory(BTreeMap::new())

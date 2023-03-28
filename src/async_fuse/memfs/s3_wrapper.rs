@@ -1,6 +1,8 @@
 use super::cache::IoMemBlock;
 use async_trait::async_trait;
 use clippy_utilities::{Cast, OverflowArithmetic};
+#[cfg(test)]
+use mockall::{automock, predicate::*};
 use s3::{
     bucket::Bucket,
     bucket_ops::BucketConfiguration,
@@ -14,8 +16,6 @@ use s3::{
 use serde_xml_rs as serde_xml;
 use std::fmt::Write;
 use std::time::SystemTime;
-#[cfg(test)]
-use mockall::{automock, predicate::*};
 
 /// S3 backend error
 #[derive(thiserror::Error, Debug)]
