@@ -204,7 +204,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
         target_path: Option<&Path>,
     ) -> anyhow::Result<(Duration, FuseAttr, u64)> {
         // pre-check
-        let (full_path, fuse_attr) = {
+        let (parent_full_path, full_path, new_node_attr, fuse_attr) = {
             let mut cache = self.cache.write().await;
             let parent_node = Self::create_node_pre_check(parent, node_name, &mut cache)
                 .context("create_node_helper() failed to pre check")?;
@@ -308,6 +308,10 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
                 panic!("failed to get parent inode {parent:?}, parent name {parent_name:?}")
             });
             let parent_full_path = pnode.full_path().to_owned();
+
+            (parent_full_path, full_path, new_node_attr, fuse_attr)
+        };
+        {
             self.sync_attr_remote(&parent_full_path).await;
             self.sync_dir_remote(&parent_full_path, node_name, &new_node_attr, target_path)
                 .await;
@@ -320,10 +324,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
                     serial::file_attr_to_serial(&pnode.get_attr()),
                 ),
             );
-
-            (full_path, fuse_attr)
-        };
-
+        }
         // inode is cached, so we should remove the path mark
         // We dont need to sync for the unmark
         let etcd_client = Arc::clone(&self.etcd_client);
