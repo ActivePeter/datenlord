@@ -329,7 +329,10 @@ impl<S: S3BackEnd + Send + Sync + 'static> S3Node<S> {
             S3NodeData::RegFile(ref data_cache) => Arc::<GlobalCache>::clone(data_cache),
             // Do nothing for Directory.
             // TODO: Sync dir data to S3 storage
-            S3NodeData::Directory(..) => return Ok(()),
+            S3NodeData::Directory(..) => {
+                self.meta.persist_handle.wait_persist(self.get_ino()).await;
+                return Ok(());
+            }
             S3NodeData::SymLink(..) => panic!("forbidden to flush data for link"),
         };
 

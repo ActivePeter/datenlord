@@ -69,7 +69,7 @@ pub struct S3MetaData<S: S3BackEnd + Send + Sync + 'static> {
     /// Fuse fd
     fuse_fd: Mutex<RawFd>,
     /// Persist handle
-    persist_handle: PersistHandle,
+    pub(crate) persist_handle: PersistHandle,
 }
 
 /// Parse S3 info
@@ -94,6 +94,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
         fs_async_sender: FsAsyncResultSender,
     ) -> (Arc<Self>, Option<CacheServer>, Vec<JoinHandle<()>>) {
         let (bucket_name, endpoint, access_key, secret_key) = parse_s3_info(s3_info);
+        debug!("trying to connect s3, bucket:{bucket_name},endpoint:{endpoint}");
         let s3_backend = Arc::new(
             match S::new_backend(bucket_name, endpoint, access_key, secret_key).await {
                 Ok(s) => s,

@@ -328,7 +328,12 @@ jobs:
         with:
           name: perf-report
           path: /tmp/output/*
-
+      - name: DatenLord With Minio S3 Test
+        run: |
+          kind delete cluster
+          kind create cluster --config ./kind-config.yaml
+          kind load docker-image ${DATENLORD_IMAGE}
+          sh scripts/datenlord_s3_test.sh
       - name: Print DatenLord logs
         if: ${{ failure() }}
         run: |
