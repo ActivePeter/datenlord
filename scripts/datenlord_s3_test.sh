@@ -24,9 +24,10 @@ ls_res=$(kubectl exec -i -t ${POD1} -n csi-datenlord -- ls ${TEST_DIR})
 
 echo "3. Reload async fuse and check whether the metadata is persisted."
 echo "》》》"
-kubectl delete -f scripts/datenlord_s3_test/datenlord-s3.yaml
-sleep 10
-kubectl apply -f scripts/datenlord_s3_test/datenlord-s3.yaml
+kubectl delete pod ${POD1} -n csi-datenlord
+# kubectl delete -f scripts/datenlord_s3_test/datenlord-s3.yaml
+# sleep 10
+# kubectl apply -f scripts/datenlord_s3_test/datenlord-s3.yaml
 sleep 60
 kubectl wait --for=condition=Ready pod -l app=datenlord-async-fuse -n csi-datenlord --timeout=120s
 
