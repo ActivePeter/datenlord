@@ -48,6 +48,25 @@ pub async fn register_node_id(
     Ok(())
 }
 
+/// Unregister current node in etcd.
+/// The registered information contains IP.
+pub async fn unregister_node_id(
+    etcd_client: &EtcdDelegate,
+    node_id: &str
+) -> anyhow::Result<()> {
+    etcd_client
+        .delete_exact_one_value(
+            format!("{ETCD_NODE_IP_PORT_PREFIX}{node_id}").as_str(),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "Remove node info in etcd failed, node_id:{node_id}"
+            )
+        })?;
+    Ok(())
+}
+
 /// Get ip address and port of a node
 pub async fn get_node_ip_and_port(
     etcd_client: Arc<EtcdDelegate>,
@@ -145,6 +164,51 @@ pub async fn register_volume(
         .unlock(lock_key)
         .await
         .with_context(|| "unlock fail while register volume")?;
+    Ok(())
+}
+
+/// Unregister volume information, add the volume to `node_id` list mapping
+pub async fn unregister_volume(
+    etcd_client: &EtcdDelegate,
+    node_id: &str,
+    volume_info: &str,
+) -> anyhow::Result<()> {
+    let lock_key = etcd_client
+        .lock(ETCD_VOLUME_INFO_LOCK.as_bytes(), 10)
+        .await
+        .with_context(|| "lock fail while register volume")?;
+
+    let volume_info_key = format!("{ETCD_VOLUME_INFO_PREFIX}{volume_info}");
+    let volume_node_list: Option<Vec<u8>> = etcd_client
+        .get_at_most_one_value(volume_info_key.as_str())
+        .await
+        .with_context(|| format!("get {volume_info_key} from etcd fail"))?;
+
+    if let Some(volume_node_list)= volume_node_list{
+        let mut node_set: HashSet<String> = bincode::deserialize(volume_node_list.as_slice())
+            .unwrap_or_else(|e| {
+                panic!("fail to deserialize node list for volume {volume_info:?}, error: {e}");
+            });
+        node_set.remove(node_id);
+        let volume_node_list_bin = bincode::serialize(&node_set).unwrap_or_else(|e| {
+            panic!("fail to serialize node list for volume {volume_info:?}, error: {e}")
+        });
+    
+        etcd_client
+            .write_or_update_kv(volume_info_key.as_str(), &volume_node_list_bin)
+            .await
+            .with_context(|| {
+                format!(
+                    "Update Volume to Node Id mapping failed, volume:{volume_info}, node id: {node_id}"
+                )
+            })?;
+    
+        etcd_client
+            .unlock(lock_key)
+            .await
+            .with_context(|| "unlock fail while register volume")?;
+    }
+    
     Ok(())
 }
 

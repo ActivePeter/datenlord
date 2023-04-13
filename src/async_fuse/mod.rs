@@ -37,7 +37,7 @@ pub async fn start_async_fuse(
                     args.cache_capacity,
                     &args.ip_address.to_string(),
                     &args.server_port,
-                    etcd_delegate,
+                    etcd_delegate.clone(),
                     &args.node_id,
                     &args.volume_info,
                 )
@@ -54,7 +54,7 @@ pub async fn start_async_fuse(
                 args.cache_capacity,
                 &args.ip_address.to_string(),
                 &args.server_port,
-                etcd_delegate,
+                etcd_delegate.clone(),
                 &args.node_id,
                 &args.volume_info,
             )
@@ -71,7 +71,7 @@ pub async fn start_async_fuse(
                 args.cache_capacity,
                 &args.ip_address.to_string(),
                 &args.server_port,
-                etcd_delegate,
+                etcd_delegate.clone(),
                 &args.node_id,
                 &args.volume_info,
             )
@@ -80,6 +80,8 @@ pub async fn start_async_fuse(
             ss.run().await?;
         }
     }
+    memfs::dist::etcd::unregister_volume(&etcd_delegate, &args.node_id, &args.volume_info).await?;
+    memfs::dist::etcd::unregister_node_id(&etcd_delegate,&args.node_id).await?;
     Ok(())
 }
 
