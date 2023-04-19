@@ -1,6 +1,7 @@
 //! The utilities of meta data management
 
 use clippy_utilities::Cast;
+use datenlord::common::etcd_delegate::KVVersion;
 use grpcio::{ChannelBuilder, Environment};
 use log::{debug, error, info, warn};
 use rand::{seq::IteratorRandom, Rng};
@@ -353,10 +354,13 @@ impl MetaData {
             .get_at_most_one_value(format!("{NODE_PREFIX}/{node_id}"))
             .await;
         match get_res {
-            Ok(val) => val.ok_or(NodeNotFound {
-                node_id: node_id.to_owned(),
-                context: vec![format!("Node ID={node_id} is not found in etcd")],
-            }),
+            Ok(val) => match val{
+                Some((v,_)) => Ok(v),
+                None => Err(NodeNotFound {
+                    node_id: node_id.to_owned(),
+                    context: vec![format!("Node ID={node_id} is not found in etcd")],
+                }),
+            },
             Err(e) => {
                 warn!("failed to get node ID={}, the error is: {}", node_id, e);
                 Err(e.with_context(|| format!("failed to get node ID={node_id}")))
@@ -371,10 +375,13 @@ impl MetaData {
             .get_at_most_one_value(format!("{SNAPSHOT_ID_PREFIX}/{snap_id}"))
             .await;
         match get_res {
-            Ok(val) => val.ok_or(SnapshotNotFound {
-                snapshot_id: snap_id.to_owned(),
-                context: vec![format!("Snapshot ID={snap_id} is not found in etcd")],
-            }),
+            Ok(val) => match val{
+                Some((val,_v)) => Ok(val),
+                None => Err(SnapshotNotFound {
+                        snapshot_id: snap_id.to_owned(),
+                        context: vec![format!("Snapshot ID={snap_id} is not found in etcd")],
+                    }),
+            }
             Err(e) => {
                 warn!("failed to get snapshot ID={}, the error is: {}", snap_id, e);
                 Err(e.with_context(|| format!("failed to get snapshot ID={snap_id} from etcd")))
@@ -394,7 +401,7 @@ impl MetaData {
             .await
         {
             Ok(val) => {
-                if let Some(sid) = val {
+                if let Some((sid,_v)) = val {
                     sid
                 } else {
                     debug!("failed to find snapshot name={} from etcd", snap_name);
@@ -430,7 +437,7 @@ impl MetaData {
             .await
         {
             Ok(val) => {
-                if let Some(s) = val {
+                if let Some((s,_v)) = val {
                     s
                 } else {
                     debug!(
@@ -609,10 +616,13 @@ impl MetaData {
             .get_at_most_one_value(format!("{VOLUME_ID_PREFIX}/{vol_id}"))
             .await
         {
-            Ok(val) => val.ok_or(VolumeNotFound {
-                volume_id: vol_id.to_owned(),
-                context: vec![format!("Volume ID={vol_id} is not found in etcd")],
-            }),
+            Ok(val) => match val{
+                Some((vol,_v)) => Ok(vol),
+                None => Err(VolumeNotFound {
+                    volume_id: vol_id.to_owned(),
+                    context: vec![format!("Volume ID={vol_id} is not found in etcd")],
+                }),
+            }
             Err(e) => {
                 debug!(
                     "failed to find volume ID={} from etcd, the error is: {}",
@@ -628,8 +638,8 @@ impl MetaData {
         let vol_name_key = format!("{VOLUME_NAME_PREFIX}/{vol_name}");
         let vol_id: String = match self.etcd_delegate.get_at_most_one_value(vol_name_key).await {
             Ok(val) => {
-                if let Some(v) = val {
-                    v
+                if let Some((vol,_v)) = val {
+                    vol
                 } else {
                     debug!("volume with name={} is not found in etcd", vol_name,);
                     return Err(VolumeNotFound {
@@ -700,7 +710,7 @@ impl MetaData {
 
         // TODO: use etcd transancation?
         let snap_id_key = format!("{SNAPSHOT_ID_PREFIX}/{snap_id}");
-        let snap_id_pre_value: DatenLordSnapshot = if let Some(snap_id_pre_value) =
+        let snap_id_pre_value: DatenLordSnapshot = if let Some((snap_id_pre_value,_v)) =
             self.etcd_delegate.delete_one_value(&snap_id_key).await?
         {
             snap_id_pre_value
@@ -712,20 +722,20 @@ impl MetaData {
         let snap_name_pre_value: String = self
             .etcd_delegate
             .delete_exact_one_value(&snap_name_key)
-            .await?;
+            .await?.0;
 
         let snap_source_id_key =
             format!("{}/{}", SNAPSHOT_SOURCE_ID_PREFIX, snap_id_pre_value.vol_id);
         let snap_source_pre_value: String = self
             .etcd_delegate
             .delete_exact_one_value(&snap_source_id_key)
-            .await?;
+            .await?.0;
 
         let node_snap_key = format!(
             "{}/{}/{}",
             NODE_SNAPSHOT_PREFIX, snap_id_pre_value.node_id, snap_id
         );
-        let _node_snap_pre_value: bool = self
+        let _node_snap_pre_value: (bool,KVVersion) = self
             .etcd_delegate
             .delete_exact_one_value(&node_snap_key)
             .await?;
@@ -750,17 +760,17 @@ impl MetaData {
         let vol_id_pre_value = self
             .etcd_delegate
             .update_existing_kv(&vol_id_key, volume)
-            .await?;
+            .await?.0;
         debug_assert_eq!(
             vol_id_pre_value.vol_id, vol_id,
             "replaced volume key={vol_id_key} value not match",
         );
 
-        let vol_name_key = format!("{}/{}", VOLUME_NAME_PREFIX, volume.vol_name);
+        let vol_name_key: String = format!("{}/{}", VOLUME_NAME_PREFIX, volume.vol_name);
         let vol_name_pre_value = self
             .etcd_delegate
             .update_existing_kv(&vol_name_key, &vol_id_str)
-            .await?;
+            .await?.0;
         debug_assert_eq!(
             vol_name_pre_value, vol_id,
             "replaced volume key={vol_name_key} value not match",
@@ -843,19 +853,19 @@ impl MetaData {
         let vol_id_pre_value: DatenLordVolume = self
             .etcd_delegate
             .delete_exact_one_value(&vol_id_key)
-            .await?;
+            .await?.0;
 
         let vol_name_key = format!("{}/{}", VOLUME_NAME_PREFIX, vol_id_pre_value.vol_name);
         let vol_name_pre_value: String = self
             .etcd_delegate
             .delete_exact_one_value(&vol_name_key)
-            .await?;
+            .await?.0;
 
         let node_vol_key = format!("{NODE_VOLUME_PREFIX}/{node_id}/{vol_id}");
         let _node_vol_pre_value: bool = self
             .etcd_delegate
             .delete_exact_one_value(&node_vol_key)
-            .await?;
+            .await?.0;
 
         self.etcd_delegate
             .unlock(lock_key)
@@ -1076,7 +1086,7 @@ impl MetaData {
                     .into_iter()
                     .collect::<Vec<_>>()
                     .join(VOLUME_BIND_MOUNT_PATH_SEPARATOR);
-                let volume_mount_paths: String = self
+                let (volume_mount_paths, _): (String, KVVersion) = self
                     .etcd_delegate
                     .update_existing_kv(&volume_mount_path_key, &mount_path_value_in_etcd)
                     .await
@@ -1111,7 +1121,7 @@ impl MetaData {
             self.get_node_id(),
             vol_id,
         );
-        let mount_paths: String = self
+        let (mount_paths, _): (String,KVVersion) = self
             .etcd_delegate
             .delete_exact_one_value(&volume_mount_path_key)
             .await?;
@@ -1133,12 +1143,12 @@ impl MetaData {
             self.get_node_id(),
             vol_id,
         );
-        let get_opt: Option<String> = self
+        let get_opt: Option<(String,KVVersion)> = self
             .etcd_delegate
             .get_at_most_one_value(volume_mount_path_key)
             .await?;
         match get_opt {
-            Some(pre_mount_paths) => Ok(pre_mount_paths
+            Some((pre_mount_paths,_)) => Ok(pre_mount_paths
                 .split(VOLUME_BIND_MOUNT_PATH_SEPARATOR)
                 .map(std::borrow::ToOwned::to_owned)
                 .collect()),
@@ -1202,7 +1212,7 @@ impl MetaData {
                     .update_existing_kv(&volume_mount_path_key, &mount_path_value_in_etcd)
                     .await;
                 match update_res {
-                    Ok(pre_mount_paths) => {
+                    Ok((pre_mount_paths,_)) => {
                         debug_assert!(
                             !pre_mount_paths.contains(target_path),
                             "the previous mount paths={pre_mount_paths} of volume ID={vol_id} \
