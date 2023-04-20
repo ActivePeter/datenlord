@@ -2,6 +2,7 @@
 
 use super::error::{Context, DatenLordResult};
 use super::util;
+use super::dist_rwlock;
 use core::fmt;
 use core::fmt::Debug;
 use core::time::Duration;
@@ -409,4 +410,27 @@ impl EtcdDelegate {
             .add_context("failed to delete all data from etcd")?;
         Ok(())
     }
+
+    /// Lock a rwlock
+    #[inline]
+    pub async fn rw_lock(
+        &self, 
+        name: &[u8], 
+        locktype: DistRwLockType,
+        timeout: Duration,
+        tag_of_local_node: &str, // mark node tag
+
+    ){
+        dist_rwlock::rw_lock(&self, name, locktype, timeout, tag_of_local_node)
+    }  
+
+    #[inline]
+    pub async fn rw_unlock(
+        &self, 
+        name: &[u8], 
+    ){
+
+    }
 }
+
+
