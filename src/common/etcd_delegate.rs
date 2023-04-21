@@ -442,7 +442,8 @@ impl EtcdDelegate {
             .await;
     
         loop {
-            match stream.next() {
+            let s=stream.next().await;
+            match stream.next().await {
                 // WatchInbound::Ready(resp) => {
                 //     println!("receive event: {:?}", resp);
                 // }

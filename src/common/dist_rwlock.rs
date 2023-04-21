@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-
 use super::etcd_delegate::EtcdDelegate;
 
 /// Distributed rwlock
