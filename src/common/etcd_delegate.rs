@@ -6,10 +6,11 @@ use super::dist_rwlock;
 use core::fmt;
 use core::fmt::Debug;
 use core::time::Duration;
-use etcd_client::{EtcdLeaseGrantRequest, TxnCmp, TxnOpResponse};
+use etcd_client::{EtcdLeaseGrantRequest, TxnCmp, TxnOpResponse, KeyRange};
 use log::debug;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use smol::stream::StreamExt;
 
 /// The client to communicate with etcd
 #[allow(missing_debug_implementations)] // etcd_client::Client doesn't impl Debug
@@ -430,6 +431,30 @@ impl EtcdDelegate {
         name: &[u8], 
     ){
 
+    }
+
+    #[inline]
+    pub async fn wait_key_delete(
+        &self, 
+        name: &[u8]){
+        let stream = self.etcd_rs_client
+            .watch(KeyRange::key(name))
+            .await;
+    
+        loop {
+            match stream.next() {
+                // WatchInbound::Ready(resp) => {
+                //     println!("receive event: {:?}", resp);
+                // }
+                // WatchInbound::Interrupted(e) => {
+                //     eprintln!("encounter error: {:?}", e);
+                // }
+                // WatchInbound::Closed => {
+                //     println!("watch stream closed");
+                //     break;
+                // }
+            }
+        }
     }
 }
 
