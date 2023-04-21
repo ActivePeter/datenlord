@@ -36,6 +36,8 @@ pub async fn rw_lock(
     timeout: Duration,
     tag_of_local_node: &str, // mark node tag
 ){
+    // todo1 fairness
+    // todo2 timeout of different read lock
     loop{
         // fix: we need a version to make sure the update is safe.
         let res=etcd.write_new_kv_no_panic(name, &RwLockValue{
