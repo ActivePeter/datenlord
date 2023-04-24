@@ -1,8 +1,8 @@
 //! The etcd client implementation
 
-use super::error::{Context, DatenLordResult};
+use super::error::{Context, DatenLordResult, DatenLordError};
 use super::util;
-use super::dist_rwlock;
+use super::dist_rwlock::{self, DistRwLockType};
 use core::fmt;
 use core::fmt::Debug;
 use core::time::Duration;
@@ -111,7 +111,7 @@ impl EtcdDelegate {
                 "failed to get RangeResponse of one key-value pair from etcd, the key={key_clone:?}"
             )
         })?;
-
+        
         let kvs = resp.take_kvs();
         match kvs.get(0) {
             Some(kv) => Ok(Some(util::decode_from_bytes::<T>(kv.value())?)),
@@ -127,12 +127,29 @@ impl EtcdDelegate {
         &self,
         key: K,
         value: &T,
+        timeout: Option<Duration>,
     ) -> DatenLordResult<Option<T>> {
         let key_clone = key.clone();
         let bin_value = bincode::serialize(value)
             .with_context(|| format!("failed to encode {value:?} to binary"))?;
         let mut req = etcd_client::EtcdPutRequest::new(key, bin_value);
         req.set_prev_kv(true); // Return previous value
+        if let Some(timeout)=timeout{
+            req.set_lease(
+                self.etcd_rs_client
+                    .lease()
+                    .grant(EtcdLeaseGrantRequest::new(timeout))
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to get LeaseGrantResponse from etcd, the timeout={} s",
+                            timeout.as_secs()
+                        )
+                    })?
+                    .id(),
+            )
+        }
+
         let mut resp = self.etcd_rs_client.kv().put(req).await.with_context(|| {
             format!("failed to get PutResponse from etcd for key={key_clone:?}, value={value:?}")
         })?;
@@ -292,7 +309,7 @@ impl EtcdDelegate {
         key: &str,
         value: &T,
     ) -> DatenLordResult<T> {
-        let write_res = self.write_to_etcd(key, value).await?;
+        let write_res = self.write_to_etcd(key, value, None).await?;
         if let Some(pre_value) = write_res {
             Ok(pre_value)
         } else {
@@ -310,7 +327,7 @@ impl EtcdDelegate {
         key: &str,
         value: &T,
     ) -> DatenLordResult<()> {
-        let write_res = self.write_to_etcd(key, value).await?;
+        let write_res = self.write_to_etcd(key, value, None).await?;
         if let Some(pre_value) = write_res {
             panic!(
                 "failed to write new key vaule pair, the key={key} exists in etcd, \
@@ -346,7 +363,29 @@ impl EtcdDelegate {
         value: &T,
     ) -> DatenLordResult<()> {
         let key_clone = key.clone();
-        let write_res = self.write_to_etcd(key, value).await?;
+        let write_res = self.write_to_etcd(key, value, None).await?;
+        if let Some(pre_value) = write_res {
+            debug!(
+                "key={:?} exists in etcd, the previous value={:?}, update it",
+                key_clone, pre_value
+            );
+        }
+        Ok(())
+    }
+
+    /// Write key value pair with timeout lease to etcd, if key exists, update it
+    #[inline]
+    pub async fn write_or_update_kv_with_timeout<
+        T: DeserializeOwned + Serialize + Clone + Debug + Send + Sync,
+        K: Into<Vec<u8>> + Debug + Clone + Send,
+    >(
+        &self,
+        key: K,
+        value: &T,
+        timeout: Duration
+    ) -> DatenLordResult<()> {
+        let key_clone = key.clone();
+        let write_res = self.write_to_etcd(key, value, Some(timeout)).await?;
         if let Some(pre_value) = write_res {
             debug!(
                 "key={:?} exists in etcd, the previous value={:?}, update it",
@@ -416,46 +455,68 @@ impl EtcdDelegate {
     #[inline]
     pub async fn rw_lock(
         &self, 
-        name: &[u8], 
+        name: &str, 
         locktype: DistRwLockType,
         timeout: Duration,
         tag_of_local_node: &str, // mark node tag
 
-    ){
-        dist_rwlock::rw_lock(&self, name, locktype, timeout, tag_of_local_node)
+    ) -> DatenLordResult<()>{
+        dist_rwlock::rw_lock(&self, name, locktype, timeout, tag_of_local_node).await
     }  
 
     #[inline]
     pub async fn rw_unlock(
         &self, 
-        name: &[u8], 
-    ){
-
+        name: &str, 
+        tag_of_local_node: &str, // mark node tag
+    ) -> DatenLordResult<()>{
+        dist_rwlock::rw_unlock(&self, name, tag_of_local_node).await
     }
 
+    /// Wait until a key is deleted.
+    /// This function will return when watch closed or there's etcd error.
     #[inline]
     pub async fn wait_key_delete(
         &self, 
-        name: &[u8]){
+        name: &str)->DatenLordResult<()>{
+        
+
         let stream = self.etcd_rs_client
             .watch(KeyRange::key(name))
             .await;
-    
-        loop {
-            let s=stream.next().await;
-            match stream.next().await {
-                // WatchInbound::Ready(resp) => {
-                //     println!("receive event: {:?}", resp);
-                // }
-                // WatchInbound::Interrupted(e) => {
-                //     eprintln!("encounter error: {:?}", e);
-                // }
-                // WatchInbound::Closed => {
-                //     println!("watch stream closed");
-                //     break;
-                // }
+
+        // When we call this function, 
+        //  there might be no key in it or someone just insert one into it.
+        // We might first receive a insert event.
+        // We need a loop to read until there's delete event.
+        loop{ 
+            if let Some(result) = stream.next().await {
+                match result{
+                    Ok(mut ok) => {
+                        let events=ok.take_events();
+                        for e in &events{
+                            if e.get_field_type()==Event_EventType::DELETE{
+                                return Ok(());
+                            }
+                        }
+                    },
+                    Err(err) => {
+                        let mut context=vec![];
+                        let errinfo="etcd watch failed when wait for a key to be deleted";
+                        debug!("{}",errinfo.to_owned());
+                        context.push(errinfo.to_owned());
+                        return Err(DatenLordError::EtcdClientErr { source: err, context })
+                    },
+                }
+            }else{
+                let mut context=vec![];
+                let errinfo="etcd watch stream closed when wait for a key to be deleted";
+                debug!("{}",errinfo.to_owned());
+                context.push(errinfo.to_owned());
+                return Err(DatenLordError::Unimplemented { context })
             }
         }
+        
     }
 }
 
