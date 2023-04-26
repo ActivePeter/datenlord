@@ -12,6 +12,8 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use smol::stream::StreamExt;
 
+pub type KVVersion = usize;
+
 /// The client to communicate with etcd
 #[allow(missing_debug_implementations)] // etcd_client::Client doesn't impl Debug
 #[derive(Clone)]
@@ -103,7 +105,7 @@ impl EtcdDelegate {
     async fn get_one_kv_async<T: DeserializeOwned, K: Into<Vec<u8>> + Debug + Clone + Send>(
         &self,
         key: K,
-    ) -> DatenLordResult<Option<T>> {
+    ) -> DatenLordResult<Option<(T,KVVersion)>> {
         let key_clone = key.clone();
         let req = etcd_client::EtcdRangeRequest::new(etcd_client::KeyRange::key(key));
         let mut resp = self.etcd_rs_client.kv().range(req).await.with_context(|| {
@@ -113,8 +115,11 @@ impl EtcdDelegate {
         })?;
         
         let kvs = resp.take_kvs();
+
         match kvs.get(0) {
-            Some(kv) => Ok(Some(util::decode_from_bytes::<T>(kv.value())?)),
+            Some(kv) => {
+                Ok(Some((util::decode_from_bytes::<T>(kv.value())?,kv.version())))
+            },
             None => Ok(None),
         }
     }
@@ -128,7 +133,7 @@ impl EtcdDelegate {
         key: K,
         value: &T,
         timeout: Option<Duration>,
-    ) -> DatenLordResult<Option<T>> {
+    ) -> DatenLordResult<Option<(T,KVVersion)>> {
         let key_clone = key.clone();
         let bin_value = bincode::serialize(value)
             .with_context(|| format!("failed to encode {value:?} to binary"))?;
@@ -155,7 +160,7 @@ impl EtcdDelegate {
         })?;
         if let Some(pre_kv) = resp.take_prev_kv() {
             let decoded_value: T = util::decode_from_bytes(pre_kv.value())?;
-            Ok(Some(decoded_value))
+            Ok(Some((decoded_value,pre_kv.version())))
         } else {
             Ok(None)
         }
@@ -171,7 +176,7 @@ impl EtcdDelegate {
         key: K,
         value: &T,
         expire: Option<Duration>,
-    ) -> DatenLordResult<Option<T>> {
+    ) -> DatenLordResult<Option<(T,KVVersion)>> {
         let bin_value = bincode::serialize(value)
             .with_context(|| format!("failed to encode {value:?} to binary"))?;
         let mut put_request = etcd_client::EtcdPutRequest::new(key.clone(), bin_value);
@@ -221,14 +226,14 @@ impl EtcdDelegate {
                 panic!("txn response length should be 1 and pop should not fail")
             }) {
                 TxnOpResponse::Range(mut resp) => {
-                    let kv = resp.take_kvs();
+                    let kvs = resp.take_kvs();
+                    let kv_first=kvs.get(0)
+                        .unwrap_or_else(|| panic!("kv res must be sz>0"));
                     //key exists
-                    let decoded_value: T = util::decode_from_bytes(
-                        kv.get(0)
-                            .unwrap_or_else(|| panic!("kv res must be sz>0"))
+                    let decoded_value: T = util::decode_from_bytes(kv_first
                             .value(),
                     )?;
-                    Ok(Some(decoded_value))
+                    Ok(Some((decoded_value,kv_first.version())))
                 }
                 TxnOpResponse::Put(_) | TxnOpResponse::Delete(_) | TxnOpResponse::Txn(_) => {
                     panic!("txn response should be RangeResponse");
@@ -244,7 +249,7 @@ impl EtcdDelegate {
     async fn delete_from_etcd<T: DeserializeOwned + Clone + Debug + Send + Sync>(
         &self,
         key: &str,
-    ) -> DatenLordResult<Vec<T>> {
+    ) -> DatenLordResult<Vec<(T,KVVersion)>> {
         let mut req = etcd_client::EtcdDeleteRequest::new(etcd_client::KeyRange::key(key));
         req.set_prev_kv(true);
         let mut resp = self
@@ -260,7 +265,7 @@ impl EtcdDelegate {
             let mut result_vec = Vec::with_capacity(deleted_value_list.len());
             for kv in deleted_value_list {
                 let decoded_value: T = util::decode_from_bytes(kv.value())?;
-                result_vec.push(decoded_value);
+                result_vec.push((decoded_value,kv.version()));
             }
             Ok(result_vec)
         } else {
@@ -292,7 +297,7 @@ impl EtcdDelegate {
     >(
         &self,
         key: K,
-    ) -> DatenLordResult<Option<T>> {
+    ) -> DatenLordResult<Option<(T,KVVersion)>> {
         let value = self.get_one_kv_async(key).await?;
         Ok(value)
     }
@@ -308,7 +313,7 @@ impl EtcdDelegate {
         &self,
         key: &str,
         value: &T,
-    ) -> DatenLordResult<T> {
+    ) -> DatenLordResult<(T,KVVersion)> {
         let write_res = self.write_to_etcd(key, value, None).await?;
         if let Some(pre_value) = write_res {
             Ok(pre_value)
@@ -348,7 +353,7 @@ impl EtcdDelegate {
         key: &str,
         value: &T,
         expire: Option<Duration>,
-    ) -> DatenLordResult<Option<T>> {
+    ) -> DatenLordResult<Option<(T,KVVersion)>> {
         self.write_to_etcd_if_none(key, value, expire).await
     }
 
@@ -403,7 +408,7 @@ impl EtcdDelegate {
     pub async fn delete_exact_one_value<T: DeserializeOwned + Clone + Debug + Send + Sync>(
         &self,
         key: &str,
-    ) -> DatenLordResult<T> {
+    ) -> DatenLordResult<(T,KVVersion)> {
         let mut deleted_value_vec = self.delete_from_etcd(key).await?;
         debug_assert_eq!(
             deleted_value_vec.len(),
@@ -426,7 +431,7 @@ impl EtcdDelegate {
     pub async fn delete_one_value<T: DeserializeOwned + Clone + Debug + Send + Sync>(
         &self,
         key: &str,
-    ) -> DatenLordResult<Option<T>> {
+    ) -> DatenLordResult<Option<(T,KVVersion)>> {
         let mut deleted_value_vec = self.delete_from_etcd(key).await?;
         debug_assert!(
             deleted_value_vec.len() <= 1,
@@ -481,7 +486,7 @@ impl EtcdDelegate {
         name: &str)->DatenLordResult<()>{
         
 
-        let stream = self.etcd_rs_client
+        let mut stream = self.etcd_rs_client
             .watch(KeyRange::key(name))
             .await;
 
@@ -494,10 +499,11 @@ impl EtcdDelegate {
                 match result{
                     Ok(mut ok) => {
                         let events=ok.take_events();
-                        for e in &events{
-                            if e.get_field_type()==Event_EventType::DELETE{
+                        for _e in &events{
+                            // TODO fixme
+                            // if e.get_field_type()==Event_EventType::DELETE{
                                 return Ok(());
-                            }
+                            // }
                         }
                     },
                     Err(err) => {
