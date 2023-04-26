@@ -1,5 +1,5 @@
 use std::{collections::HashSet, time::Duration};
-use super::{etcd_delegate::EtcdDelegate, error::DatenLordResult};
+use super::{etcd_delegate::{EtcdDelegate, KVVersion}, error::DatenLordResult};
 use serde::{Deserialize, Serialize};
 
 /// timeout of the dist lock kv
@@ -23,8 +23,12 @@ struct RwLockValue{
     tags_of_nodes: HashSet<String> 
 }
 
+
+/// renew the lease for continue use the lock key.
+/// 
+/// * `version` - Version of the lock need to be updated
 #[inline]
-async fn renew_lease(etcd: &EtcdDelegate, key: &str, value:RwLockValue, fail_ctx_info: &str) -> DatenLordResult<()> {
+async fn renew_lease(etcd: &EtcdDelegate, key: &str, value:RwLockValue, fail_ctx_info: &str, version: KVVersion) -> DatenLordResult<()> {
     match etcd.write_or_update_kv_with_timeout(key, &value, Duration::from_secs(DIST_LOCK_TIMEOUT_SEC)).await{
         Ok(_) => Ok(()),
         Err(err) => {
@@ -70,7 +74,7 @@ pub async fn rw_lock(
 
         match res{
             // lock exists
-            Some(mut res) => {
+            Some((mut res, version)) => {
                 if res.locktype==DistRwLockType::RLock && locktype==DistRwLockType::RLock{
                     // remote: r | current: r
                     // check if the node exist
@@ -79,13 +83,13 @@ pub async fn rw_lock(
                     res.tags_of_nodes.insert(tag_of_local_node.to_owned());
                     // must todo:: when there's conflict, we should offer the version and use the transaction.
                     //  make sure the operated data is the version we got.
-                    renew_lease(etcd, name, res, "renew read lock").await?;
+                    renew_lease(etcd, name, res, "renew read lock", version).await?;
                     return Ok(());
                 }else if res.locktype==DistRwLockType::WLock && locktype==DistRwLockType::WLock{
                     // remote: w | current: w
                     // 1. if same node, renew the lease
                     if res.tags_of_nodes.contains(tag_of_local_node){
-                        renew_lease(etcd, name, res, "renew write lock").await?;
+                        renew_lease(etcd, name, res, "renew write lock", version).await?;
                         return Ok(());
                     }
                     // 2. else, wait release
@@ -117,7 +121,7 @@ pub async fn rw_unlock(
     let res=etcd.get_at_most_one_value::<RwLockValue,&str>(name).await;
     match res{
         Ok(res) => {
-            if let Some(mut lockinfo)=res{
+            if let Some((mut lockinfo, version))=res{
                 if lockinfo.tags_of_nodes.remove(tag_of_local_node){
                     // match 
                     // must todo: these two operations must be atomic (use transaction to make sure the version)
