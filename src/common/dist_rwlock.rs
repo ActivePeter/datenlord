@@ -106,6 +106,10 @@ async fn remove_key(etcd: &EtcdDelegate, key: &str) -> DatenLordResult<()> {
     }
 }
 
+
+// todo 
+//  lock timeout log
+
 /// Lock a rwlock
 ///  if txn failed, will retry.
 ///  if kv error occured, will return the error directly
@@ -243,5 +247,22 @@ pub async fn rw_unlock(
                 return Err(err);
             }
         }
+    }
+}
+
+// test todo
+//  single node read write
+//  single node read
+//  single node write
+//  multi node read
+//  multi node write
+//  multi node read write
+//  etcd error when working
+
+#[cfg(test)]
+mod test {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_mock_s3() {
+        let _m = create_mock();
     }
 }

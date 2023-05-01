@@ -579,11 +579,14 @@ impl EtcdDelegate {
 
     /// Wait until a key is deleted.
     /// This function will return when watch closed or there's etcd error.
+    /// Timeout 
     #[inline]
     pub async fn wait_key_delete(
         &self, 
         name: &str)->DatenLordResult<()>{
         
+
+
 
         let mut stream = self.etcd_rs_client
             .watch(KeyRange::key(name))
