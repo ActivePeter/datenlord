@@ -585,12 +585,32 @@ impl EtcdDelegate {
         &self, 
         name: &str)->DatenLordResult<()>{
         
-
-
-
         let mut stream = self.etcd_rs_client
             .watch(KeyRange::key(name))
             .await;
+        
+        let (
+            stop_wait_log_task_chan_tx,
+            stop_wait_log_task_chan_rx
+        )=tokio::sync::oneshot::channel::<()>();
+        let name_clone=name.to_owned();
+        let wait_log_task=tokio::spawn(async move{
+            let mut sec_cnt:i32 = 0;
+            let mut stop_wait_log_task_chan_rx=Some(stop_wait_log_task_chan_rx);
+            
+            loop{
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                        sec_cnt+=1;
+                        log::debug!("wait for dist lock {name_clone} for {sec_cnt} seconds, if this goes too long, there might be dead lock");
+                    }
+                    _ = stop_wait_log_task_chan_rx.take().unwrap_or_else(||{panic!("stop_wait_log_task_chan_rx should be Some because it can be take for once")}) => {
+                        println!("returning wait_key_delete, stop it's sub task");
+                        break;
+                    }
+                }
+            }
+        });
 
         // When we call this function, 
         //  there might be no key in it or someone just insert one into it.
@@ -604,6 +624,11 @@ impl EtcdDelegate {
                         for _e in &events{
                             // TODO fixme
                             // if e.get_field_type()==Event_EventType::DELETE{
+                                let _=stop_wait_log_task_chan_tx.send(()).unwrap_or_else(|_|{
+                                    panic!("send failed, stop_wait_log_task_chan_rx was dropped?")});
+                                wait_log_task.await.unwrap_or_else(|_|{
+                                    panic!("join wait log task failed");
+                                });
                                 return Ok(());
                             // }
                         }
@@ -613,6 +638,12 @@ impl EtcdDelegate {
                         let errinfo="etcd watch failed when wait for a key to be deleted";
                         debug!("{}",errinfo.to_owned());
                         context.push(errinfo.to_owned());
+
+                        let _=stop_wait_log_task_chan_tx.send(()).unwrap_or_else(|_|{
+                            panic!("send failed, stop_wait_log_task_chan_rx was dropped?")});
+                        wait_log_task.await.unwrap_or_else(|_|{
+                            panic!("join wait log task failed");
+                        });
                         return Err(DatenLordError::EtcdClientErr { source: err, context })
                     },
                 }
@@ -621,6 +652,12 @@ impl EtcdDelegate {
                 let errinfo="etcd watch stream closed when wait for a key to be deleted";
                 debug!("{}",errinfo.to_owned());
                 context.push(errinfo.to_owned());
+
+                let _=stop_wait_log_task_chan_tx.send(()).unwrap_or_else(|_|{
+                    panic!("send failed, stop_wait_log_task_chan_rx was dropped?")});
+                wait_log_task.await.unwrap_or_else(|_|{
+                    panic!("join wait log task failed");
+                });
                 return Err(DatenLordError::Unimplemented { context })
             }
         }
