@@ -261,8 +261,34 @@ pub async fn rw_unlock(
 
 #[cfg(test)]
 mod test {
+    use super::*;
+    
+    const ETCD_ADDRESS: &str = "localhost:2379";
+
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_mock_s3() {
-        let _m = create_mock();
+    async fn test_etcd() {
+        let mut addrs=vec![];
+        addrs.push(ETCD_ADDRESS.to_owned());
+        let etcd=EtcdDelegate::new(addrs).await;
+        match etcd{
+            Ok(etcd)=>{
+                let testk="test_k";
+                if let Err(err)=etcd.write_or_update_kv(testk, &testk.to_owned()).await{
+                    panic!("write etcd kv failed with err: {err}");
+                }
+                let deleted=etcd.delete_exact_one_value::<String>(testk).await;
+                match deleted{
+                    Ok((res,_))=>{
+                        assert_eq!(&res,testk);
+                    }
+                    Err(err)=>{
+                        panic!("delete test key failed, err:{err}");
+                    }
+                }
+            }
+            Err(err)=>{
+                panic!("failed to connect etcd, err:{err}");
+            }
+        }
     }
 }
