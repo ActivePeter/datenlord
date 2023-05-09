@@ -261,9 +261,17 @@ pub async fn rw_unlock(
 
 #[cfg(test)]
 mod test {
+    use std::time::{SystemTime,UNIX_EPOCH};
+
     use super::*;
     
     const ETCD_ADDRESS: &str = "localhost:2379";
+
+    fn timestamp()->Duration{
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|err| panic!("Time went backwards, err:{err}"))
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_etcd() {
@@ -285,6 +293,87 @@ mod test {
                         panic!("delete test key failed, err:{err}");
                     }
                 }
+            }
+            Err(err)=>{
+                panic!("failed to connect etcd, err:{err}");
+            }
+        }
+    }
+
+    #[allow(clippy::unwrap_used)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_rwlock() {
+        let mut addrs=vec![];
+        addrs.push(ETCD_ADDRESS.to_owned());
+        let etcd=EtcdDelegate::new(addrs).await;
+        match etcd{
+            Ok(etcd)=>{
+                {
+                    // There's no conflict between different lock 
+                    let begin=timestamp();
+                    rw_lock(&etcd, "lock", DistRwLockType::RLock, Duration::from_secs(1), "node_tag").await.unwrap();
+                    rw_lock(&etcd, "lock2", DistRwLockType::RLock, Duration::from_secs(1), "node_tag").await.unwrap();
+                    let end=timestamp();
+                    assert!((end-begin).as_millis()<10);
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                {
+                   //same node update same lock 
+                   let begin=timestamp();
+                   rw_lock(&etcd, "lock", DistRwLockType::RLock, Duration::from_secs(1), "node_tag").await.unwrap();
+                   rw_lock(&etcd, "lock", DistRwLockType::RLock, Duration::from_secs(1), "node_tag").await.unwrap();
+                   let end=timestamp();
+                   assert!((end-begin).as_millis()<10);
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                {
+                    //different nodes get same rlock 
+                    let begin=timestamp();
+                    rw_lock(&etcd, "lock", DistRwLockType::RLock, Duration::from_secs(1), "node_tag").await.unwrap();
+                    rw_lock(&etcd, "lock", DistRwLockType::RLock, Duration::from_secs(1), "node_tag2").await.unwrap();
+                    let end=timestamp();
+                    assert!((end-begin).as_millis()<10);
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                {
+                    // There's conflict between different lock type
+                    let begin=timestamp();
+                    rw_lock(&etcd, "lock", DistRwLockType::WLock, Duration::from_secs(1), "node_tag").await.unwrap();
+                    rw_lock(&etcd, "lock", DistRwLockType::RLock, Duration::from_secs(1), "node_tag").await.unwrap();
+                    let end=timestamp();
+                    assert!((end-begin).as_millis()>900);
+                 }
+                 tokio::time::sleep(Duration::from_secs(1)).await;
+                 {
+                    // different node get different type lock
+                    let begin=timestamp();
+                    rw_lock(&etcd, "lock", DistRwLockType::WLock, Duration::from_secs(1), "node_tag1").await.unwrap();
+                    rw_lock(&etcd, "lock", DistRwLockType::RLock, Duration::from_secs(1), "node_tag").await.unwrap();
+                    let end=timestamp();
+                    assert!((end-begin).as_millis()>900);
+                 }
+                 tokio::time::sleep(Duration::from_secs(1)).await;
+                 {
+                    // unlock
+                    let begin=timestamp();
+                    rw_lock(&etcd, "lock", DistRwLockType::WLock, Duration::from_secs(1), "node_tag").await.unwrap();
+                    rw_unlock(&etcd, "lock", "node_tag").await.unwrap();
+                    rw_lock(&etcd, "lock", DistRwLockType::WLock, Duration::from_secs(1), "node_tag").await.unwrap();
+                    let end=timestamp();
+                    assert!((end-begin).as_millis()<10);
+                 }
+                 tokio::time::sleep(Duration::from_secs(1)).await;
+                 {
+                    // unlock by other node is not ok 
+                    let begin=timestamp();
+                    rw_lock(&etcd, "lock", DistRwLockType::WLock, Duration::from_secs(1), "node_tag").await.unwrap();
+                    rw_unlock(&etcd, "lock", "node_tag1").await.unwrap();
+                    rw_lock(&etcd, "lock", DistRwLockType::WLock, Duration::from_secs(1), "node_tag").await.unwrap();
+                    let end=timestamp();
+                    assert!((end-begin).as_millis()>900);
+                 }
+                 tokio::time::sleep(Duration::from_secs(1)).await;
+                 // todo: add test about etcd crash
             }
             Err(err)=>{
                 panic!("failed to connect etcd, err:{err}");
