@@ -1,7 +1,7 @@
 //! FUSE async implementation
 
 use self::fuse::file_system::FsController;
-use crate::{common::etcd_delegate::EtcdDelegate, AsyncFuseArgs, VolumeType};
+use crate::{common::{etcd_delegate::EtcdDelegate, arg::{AsyncFuseArgs, VolumeType}}};
 use fuse::session::Session;
 use memfs::s3_wrapper::{DoNothingImpl, S3BackEndImpl};
 // use std::sync::Arc;

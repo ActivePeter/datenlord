@@ -113,7 +113,6 @@ async fn remove_key(etcd: &EtcdDelegate, key: &str) -> DatenLordResult<()> {
 /// Lock a rwlock
 ///  if txn failed, will retry.
 ///  if kv error occured, will return the error directly
-#[inline]
 pub async fn rw_lock(
     etcd: &EtcdDelegate,
     name: &str,
@@ -122,7 +121,6 @@ pub async fn rw_lock(
     tag_of_local_node: &str, // mark node tag
 ) -> DatenLordResult<()> {
     // todo1 fairness
-    // todo2 timeout of different read lock
     let mut failtime = 0;
     //  It's ok because we only care for the last read lock to be release.
     loop {
@@ -151,7 +149,6 @@ pub async fn rw_lock(
                     // 1. if node exists in the set, renew the lease (already hold)
                     // 2. if node doesn't exist, add it into the set and renew the lease
                     res.tags_of_nodes.insert(tag_of_local_node.to_owned());
-                    // must todo:: when there's conflict, we should offer the version and use the transaction.
                     //  make sure the operated data is the version we got.
                     if !renew_lease(etcd, name, res, "renew read lock", version).await? {
                         failtime += 1;
@@ -193,7 +190,6 @@ pub async fn rw_lock(
 /// Unlock rwlock
 ///  if txn failed, will retry.
 ///  if kv error occured, will return the error directly
-#[inline]
 pub async fn rw_unlock(
     etcd: &EtcdDelegate,
     name: &str,
@@ -249,15 +245,6 @@ pub async fn rw_unlock(
         }
     }
 }
-
-// test todo
-//  single node read write
-//  single node read
-//  single node write
-//  multi node read
-//  multi node write
-//  multi node read write
-//  etcd error when working
 
 #[cfg(test)]
 mod test {

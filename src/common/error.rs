@@ -3,6 +3,7 @@
 use grpcio::RpcStatusCode;
 use std::path::PathBuf;
 use thiserror::Error;
+use crate::async_fuse;
 
 /// `DatenLord` Result type
 pub type DatenLordResult<T> = Result<T, DatenLordError>;
@@ -200,6 +201,15 @@ pub enum DatenLordError {
         /// Context of the error
         context: Vec<String>,
     },
+
+    /// Wrap the error `async_fuse::memfs::dist::rwlock::FsDistRwLockErr`
+    #[error("async_fuse::memfs::dist::rwlock::FsDistRwLockErr, err: {:#?}", .source)]
+    FsDistRwLockErr {
+        /// Wrapped source error
+        source: async_fuse::memfs::dist::rwlock::FsDistRwLockErr,
+        /// Context of the error
+        context: Vec<String>,
+    }
     // /// Error when doing s3 operation.
     // #[error("S3 error: {0}")]
     // S3Error(s3_wrapper::S3Error),
@@ -287,7 +297,8 @@ impl DatenLordError {
                 GrpcioErr,
                 SerdeJsonErr,
                 JoinErr,
-                Unimplemented
+                Unimplemented,
+                FsDistRwLockErr
             ]
         );
         self
@@ -343,7 +354,8 @@ impl From<DatenLordError> for RpcStatusCode {
             | DatenLordError::SystemTimeErr { .. }
             | DatenLordError::SerdeJsonErr { .. }
             | DatenLordError::WalkdirErr { .. }
-            | DatenLordError::JoinErr { .. } => Self::INTERNAL,
+            | DatenLordError::JoinErr { .. }
+            | DatenLordError::FsDistRwLockErr { .. } => Self::INTERNAL,
             DatenLordError::GrpcioErr { source, .. } => match source {
                 grpcio::Error::RpcFailure(ref s) => s.code(),
                 grpcio::Error::Codec(..)

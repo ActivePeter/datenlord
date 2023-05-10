@@ -31,6 +31,7 @@ use async_trait::async_trait;
 use clippy_utilities::{Cast, OverflowArithmetic};
 use log::{debug, warn};
 use nix::errno::Errno;
+use nix::fcntl::OFlag;
 use nix::sys::stat::SFlag;
 
 use crate::async_fuse::fuse::file_system;
@@ -279,6 +280,14 @@ impl<M: MetaData + Send + Sync + 'static> FileSystem for MemFs<M> {
             panic!("open() found fs is inconsistent, the i-node of ino={ino} should be in cache",);
         });
         let o_flags = fs_util::parse_oflag(flags);
+        if o_flags.contains(OFlag::O_RDWR)||
+            o_flags.contains(OFlag::O_WRONLY)||
+            o_flags.contains(OFlag::O_APPEND){
+            // holds a dist write lock
+        }else{
+            // holds a dist read lock
+            
+        }
         // TODO: handle open flags
         // <https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html>
         // let open_res = if let SFlag::S_IFLNK = node.get_type() {

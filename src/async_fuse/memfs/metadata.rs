@@ -49,6 +49,8 @@ pub trait MetaData {
         fs_async_sender: FsAsyncResultSender,
     ) -> (Arc<Self>, Option<CacheServer>, Vec<JoinHandle<()>>);
 
+    fn node_id(&self) -> &str;
+
     /// Helper function to create node
     async fn create_node_helper(
         &self,
@@ -121,6 +123,8 @@ pub struct DefaultMetaData {
     fuse_fd: Mutex<RawFd>,
     /// Send async result to session
     fs_async_sender: FsAsyncResultSender,
+    /// Current service id
+    node_id: String,
 }
 
 #[async_trait]
@@ -133,7 +137,7 @@ impl MetaData for DefaultMetaData {
         _: &str,
         _: &str,
         _: EtcdDelegate,
-        _: &str,
+        node_id: &str,
         _: &str,
         fs_async_sender: FsAsyncResultSender,
     ) -> (Arc<Self>, Option<CacheServer>, Vec<JoinHandle<()>>) {
@@ -153,6 +157,7 @@ impl MetaData for DefaultMetaData {
             data_cache: Arc::new(GlobalCache::new_with_capacity(capacity)),
             fuse_fd: Mutex::new(-1_i32),
             fs_async_sender,
+            node_id:node_id.to_owned(),
         });
 
         let root_inode =
@@ -165,6 +170,10 @@ impl MetaData for DefaultMetaData {
         meta.cache.write().await.insert(FUSE_ROOT_ID, root_inode);
 
         (meta, None, vec![])
+    }
+
+    fn node_id(&self) -> &str{
+        &self.node_id
     }
 
     /// Get metadata cache

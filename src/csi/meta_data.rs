@@ -1,7 +1,7 @@
 //! The utilities of meta data management
 
 use clippy_utilities::Cast;
-use datenlord::common::etcd_delegate::KVVersion;
+use crate::common::etcd_delegate::KVVersion;
 use grpcio::{ChannelBuilder, Environment};
 use log::{debug, error, info, warn};
 use rand::{seq::IteratorRandom, Rng};

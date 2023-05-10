@@ -5,5 +5,6 @@ pub mod etcd;
 pub mod request;
 pub mod response;
 pub mod server;
+pub mod rwlock;
 /// Tcp communication module
 mod tcp;

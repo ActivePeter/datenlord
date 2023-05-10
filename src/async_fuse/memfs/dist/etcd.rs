@@ -1,7 +1,6 @@
 use crate::async_fuse::memfs::INum;
 use crate::common::error::Context;
-use crate::common::etcd_delegate::EtcdDelegate;
-use datenlord::common::etcd_delegate::KVVersion;
+use crate::common::etcd_delegate::{EtcdDelegate, KVVersion};
 use log::debug;
 use std::collections::HashSet;
 use std::ops::Add;
@@ -61,7 +60,7 @@ pub async fn get_node_ip_and_port(
             format!("Fail to get Node Ip address and port information, node_id:{node_id}")
         })?;
 
-    if let Some((ip_and_port,_v)) = ip_and_port {
+    if let Some((ip_and_port, _v)) = ip_and_port {
         debug!("node {} ip and port is {}", node_id, ip_and_port);
         Ok(ip_and_port)
     } else {
@@ -84,7 +83,7 @@ pub async fn register_volume(
         .with_context(|| "lock fail while register volume")?;
 
     let volume_info_key = format!("{ETCD_VOLUME_INFO_PREFIX}{volume_info}");
-    let volume_node_list: Option<(Vec<u8>,KVVersion)> = etcd_client
+    let volume_node_list: Option<(Vec<u8>, KVVersion)> = etcd_client
         .get_at_most_one_value(volume_info_key.as_str())
         .await
         .with_context(|| format!("get {volume_info_key} from etcd fail"))?;
@@ -116,7 +115,7 @@ pub async fn register_volume(
             hash.insert(node_id.to_owned());
             hash
         },
-        |(node_list,_v)| {
+        |(node_list, _v)| {
             let mut node_set: HashSet<String> = bincode::deserialize(node_list.as_slice())
                 .unwrap_or_else(|e| {
                     panic!("fail to deserialize node list for volume {volume_info:?}, error: {e}");
@@ -157,12 +156,12 @@ pub async fn get_volume_nodes(
     volume_info: &str,
 ) -> anyhow::Result<HashSet<String>> {
     let volume_info_key = format!("{ETCD_VOLUME_INFO_PREFIX}{volume_info}");
-    let volume_node_list: Option<(Vec<u8>,KVVersion)> = etcd_client
+    let volume_node_list: Option<(Vec<u8>, KVVersion)> = etcd_client
         .get_at_most_one_value(volume_info_key.as_str())
         .await
         .with_context(|| format!("get {volume_info_key} from etcd fail"))?;
 
-    let new_volume_node_list = if let Some((node_list,_v)) = volume_node_list {
+    let new_volume_node_list = if let Some((node_list, _v)) = volume_node_list {
         let mut node_set: HashSet<String> = bincode::deserialize(node_list.as_slice())
             .unwrap_or_else(|e| {
                 panic!("fail to deserialize node list for volume {volume_info:?}, error: {e}");
@@ -184,7 +183,7 @@ pub async fn get_volume_nodes(
 }
 
 /// Modify node list of a file
-async fn modify_file_node_list<F: Fn(Option<(Vec<u8>,KVVersion)>) -> HashSet<String>>(
+async fn modify_file_node_list<F: Fn(Option<(Vec<u8>, KVVersion)>) -> HashSet<String>>(
     etcd_client: &EtcdDelegate,
     file_name: &[u8],
     fun: F,
@@ -204,7 +203,7 @@ where
     node_list_key.extend_from_slice(file_name);
     let node_list_key_clone = node_list_key.clone();
 
-    let node_list: Option<(Vec<u8>,KVVersion)> = etcd_client
+    let node_list: Option<(Vec<u8>, KVVersion)> = etcd_client
         .get_at_most_one_value(node_list_key)
         .await
         .with_context(|| format!("get {ETCD_NODE_ID_COUNTER_KEY} from etcd fail"))?;
@@ -237,14 +236,14 @@ pub async fn add_node_to_file_list(
     node_id: &str,
     file_name: &[u8],
 ) -> anyhow::Result<()> {
-    let add_node_fun = |node_list: Option<(Vec<u8>,KVVersion)>| -> HashSet<String> {
+    let add_node_fun = |node_list: Option<(Vec<u8>, KVVersion)>| -> HashSet<String> {
         node_list.map_or_else(
             || {
                 let mut node_set = HashSet::<String>::new();
                 node_set.insert(node_id.to_owned());
                 node_set
             },
-            |(list,_v)| {
+            |(list, _v)| {
                 let mut node_set: HashSet<String> = bincode::deserialize(list.as_slice())
                     .unwrap_or_else(|e| {
                         panic!("fail to deserialize node list for file {file_name:?}, error: {e}");
@@ -268,9 +267,9 @@ pub async fn remove_node_from_file_list(
     node_id: &str,
     file_name: &[u8],
 ) -> anyhow::Result<()> {
-    let remove_node_fun = |node_list: Option<(Vec<u8>,KVVersion)>| -> HashSet<String> {
+    let remove_node_fun = |node_list: Option<(Vec<u8>, KVVersion)>| -> HashSet<String> {
         match node_list {
-            Some((list,_v)) => {
+            Some((list, _v)) => {
                 let mut node_set: HashSet<String> = bincode::deserialize(list.as_slice())
                     .unwrap_or_else(|e| {
                         panic!("fail to deserialize node list for file {file_name:?}, error: {e}");
@@ -318,7 +317,7 @@ pub async fn fetch_add_inode_next_range(
     // Use cas to replace the lock
     // Lock before rewrite
     let lockkey = lock_inode_number(Arc::clone(&etcd_client)).await?;
-    let inode_range_begin: Option<(Vec<u8>,KVVersion)> = etcd_client
+    let inode_range_begin: Option<(Vec<u8>, KVVersion)> = etcd_client
         .get_at_most_one_value(ETCD_INODE_NEXT_RANGE.as_bytes())
         .await
         .with_context(|| {
@@ -327,7 +326,7 @@ pub async fn fetch_add_inode_next_range(
 
     // Read inode range begin from etcd
     let inode_range_begin = match inode_range_begin {
-        Some((number,_v)) => {
+        Some((number, _v)) => {
             let number: INum = bincode::deserialize(number.as_slice()).unwrap_or_else(|e| {
                 panic!("fail to deserialize inode number from etcd, error: {e}");
             });
@@ -366,7 +365,7 @@ pub async fn mark_fullpath_with_ino_in_etcd(
         .with_context(|| format!("mark_fullpath_with_ino_in_etcd {fullpath} {ino}"))?
     {
         None => Ok(ino),
-        Some((oldino,_v)) => Ok(oldino),
+        Some((oldino, _v)) => Ok(oldino),
     }
 }
 

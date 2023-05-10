@@ -7,7 +7,7 @@
     bare_trait_objects,
     // box_pointers,
     // elided_lifetimes_in_paths, // allow anonymous lifetime
-    missing_copy_implementations,
+    // missing_copy_implementations, // Copy may cause unnecessary memory copy
     missing_debug_implementations,
     missing_docs, // TODO: add documents
     single_use_lifetimes, // TODO: fix lifetime names only used once
@@ -47,4 +47,5 @@
     clippy::std_instead_of_alloc,
 )]
 
+pub mod async_fuse;
 pub mod common;

@@ -146,6 +146,10 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
         (meta, Some(server), async_tasks)
     }
 
+    fn node_id(&self) -> &str{
+        &self.node_id
+    }
+
     /// Get metadata cache
     fn cache(&self) -> &RwLock<BTreeMap<INum, Self::N>> {
         &self.cache
