@@ -5,9 +5,12 @@ use super::fs_util::{self, FileAttr};
 use super::node::{self, DefaultNode, Node};
 use super::RenameParam;
 use crate::async_fuse::fuse::file_system::FsAsyncResultSender;
+use crate::async_fuse::fuse::fuse_reply::ReplyOpen;
+use crate::async_fuse::fuse::fuse_request::Request;
 use crate::async_fuse::fuse::protocol::{FuseAttr, INum, FUSE_ROOT_ID};
 use crate::async_fuse::util;
-use crate::common::error::DatenLordResult;
+use crate::common::dist_rwlock::DistRwLockType;
+use crate::common::error::{DatenLordError, DatenLordResult};
 use crate::common::etcd_delegate::EtcdDelegate;
 use anyhow::Context;
 use async_trait::async_trait;
@@ -18,7 +21,7 @@ use nix::fcntl::OFlag;
 use nix::sys::stat::SFlag;
 use nix::unistd;
 use parking_lot::RwLock as SyncRwLock; // conflict with tokio RwLock
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -106,6 +109,21 @@ pub trait MetaData {
 
     /// Stop all async tasks
     fn stop_all_async_tasks(&self);
+
+    /// Try lock operation of distributed read-write lock
+    /// Return true if lock is acquired
+    async fn dist_rw_try_lock(&self, name: &str, locktype: DistRwLockType)
+        -> DatenLordResult<bool>;
+
+    /// Unlock operation of distributed read-write lock
+    async fn dist_rw_unlock(&self, name: &str) -> DatenLordResult<()>;
+
+    async fn open_helper(
+        &self,
+        req: &Request<'_>,
+        flags: u32,
+        reply: ReplyOpen,
+    ) -> nix::Result<usize>;
 }
 
 /// File system in-memory meta-data
@@ -122,6 +140,8 @@ pub struct DefaultMetaData {
     fuse_fd: Mutex<RawFd>,
     /// Send async result to session
     fs_async_sender: FsAsyncResultSender,
+    /// Opened files
+    opened_files: RwLock<HashMap<INum, DefaultNode>>,
 }
 
 #[async_trait]
@@ -778,6 +798,69 @@ impl MetaData for DefaultMetaData {
 
     /// Stop all async tasks
     fn stop_all_async_tasks(&self) {}
+
+    /// Try lock operation of distributed read-write lock
+    /// Return true if lock is acquired
+    async fn dist_rw_try_lock(
+        &self,
+        name: &str,
+        locktype: DistRwLockType,
+    ) -> DatenLordResult<bool> {
+        Err(DatenLordError::Unimplemented {
+            context: vec!["dist_rw_try_lock is not implemented for default metadata".to_owned()],
+        })
+    }
+
+    /// Unlock operation of distributed read-write lock
+    async fn dist_rw_unlock(&self, name: &str) -> DatenLordResult<()> {
+        Err(DatenLordError::Unimplemented {
+            context: vec!["dist_rw_unlock is not implemented for default metadata".to_owned()],
+        })
+    }
+
+    /// default metadata don't use this function
+    async fn open_helper(
+        &self,
+        req: &Request<'_>,
+        flags: u32,
+        reply: ReplyOpen,
+    ) -> nix::Result<usize> {
+        let ino = req.nodeid();
+        debug!("open(ino={}, flags={}, req={:?})", ino, flags, req);
+
+        let cache = self.cache().read().await;
+        let node = cache.get(&ino).unwrap_or_else(|| {
+            panic!("open() found fs is inconsistent, the i-node of ino={ino} should be in cache",);
+        });
+        let o_flags = fs_util::parse_oflag(flags);
+        // TODO: handle open flags
+        // <https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html>
+        // let open_res = if let SFlag::S_IFLNK = node.get_type() {
+        //     node.open_symlink_target(o_flags).await.add_context(format!(
+        //         "open() failed to open symlink target={:?} with flags={}",
+        //         node.get_symlink_target(),
+        //         flags,
+        //     ))
+        // } else {
+        let dup_res: DatenLordResult<RawFd> = node.dup_fd(o_flags).await.add_context(format!(
+            "open() failed to duplicate the file handler of ino={} and name={:?}",
+            ino,
+            node.get_name(),
+        ));
+        match dup_res {
+            Ok(new_fd) => {
+                debug!(
+                    "open() successfully duplicated the file handler of ino={} and name={:?}, fd={}, flags={:?}",
+                    ino, node.get_name(), new_fd, flags,
+                );
+                reply.opened(new_fd, flags).await
+            }
+            Err(e) => {
+                debug!("open() failed, the error is: {}", e);
+                reply.error(e).await
+            }
+        }
+    }
 }
 
 impl DefaultMetaData {

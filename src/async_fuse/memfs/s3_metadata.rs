@@ -2,6 +2,7 @@ use super::cache::GlobalCache;
 use super::dir::DirEntry;
 use super::dist::client as dist_client;
 use super::dist::etcd;
+use super::dist::rwlock::DistRwLockManager;
 use super::dist::server::CacheServer;
 use super::fs_util::{self, FileAttr};
 use super::inode::InodeState;
@@ -17,8 +18,11 @@ use super::RenameParam;
 use crate::async_fuse::fuse::file_system::FsAsyncResultSender;
 #[cfg(feature = "abi-7-18")]
 use crate::async_fuse::fuse::fuse_reply::FuseDeleteNotification;
+use crate::async_fuse::fuse::fuse_reply::ReplyOpen;
+use crate::async_fuse::fuse::fuse_request::Request;
 use crate::async_fuse::fuse::protocol::{FuseAttr, INum, FUSE_ROOT_ID};
 use crate::async_fuse::util;
+use crate::common::dist_rwlock::DistRwLockType;
 use crate::common::error::{DatenLordError, DatenLordResult};
 use crate::common::etcd_delegate::EtcdDelegate;
 use anyhow::Context;
@@ -31,6 +35,8 @@ use nix::fcntl::OFlag;
 use nix::sys::stat::SFlag;
 use parking_lot::RwLock as SyncRwLock;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::os::unix::io::RawFd;
 use std::path::Path;
 use std::sync::{atomic::AtomicU32, Arc};
@@ -71,6 +77,9 @@ pub struct S3MetaData<S: S3BackEnd + Send + Sync + 'static> {
     fuse_fd: Mutex<RawFd>,
     /// Persist handle
     persist_handle: PersistHandle,
+    /// Dist rwlock manager
+    dist_rwlock_manager: DistRwLockManager<Self>,
+    
 }
 
 /// Parse S3 info
@@ -102,10 +111,17 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
             },
         );
         let mut async_tasks = vec![];
+        // persist part
         let (persist_handle, persist_join_handle) =
             PersistTask::spawn(Arc::clone(&s3_backend), fs_async_sender);
         async_tasks.push(persist_join_handle);
+        // etcd delegate
         let etcd_arc = Arc::new(etcd_client);
+        // dist rwlock
+        let (dist_rwlock_manager_async_task, dist_rwlock_manager) =
+            DistRwLockManager::new(Arc::clone(&etcd_arc));
+        async_tasks.push(dist_rwlock_manager_async_task);
+        // data cache
         let data_cache = Arc::new(GlobalCache::new_dist_with_bz_and_capacity(
             10_485_760, // 10 * 1024 * 1024
             capacity,
@@ -125,6 +141,7 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
             path2inum: RwLock::new(BTreeMap::new()),
             fuse_fd: Mutex::new(-1_i32),
             persist_handle,
+            dist_rwlock_manager,
         });
 
         let server = CacheServer::new(
@@ -572,9 +589,117 @@ impl<S: S3BackEnd + Sync + Send + 'static> MetaData for S3MetaData<S> {
         );
         result
     }
+
     /// Stop all async tasks
     fn stop_all_async_tasks(&self) {
         self.persist_handle.system_end();
+    }
+
+    /// Try lock operation of distributed read-write lock
+    /// Return true if lock is acquired
+    async fn dist_rw_try_lock(
+        &self,
+        name: &str,
+        locktype: DistRwLockType,
+    ) -> DatenLordResult<bool> {
+        self.dist_rwlock_manager.lock(name, locktype);
+        ().await
+    }
+
+    /// Unlock operation of distributed read-write lock
+    async fn dist_rw_unlock(&self, name: &str) -> DatenLordResult<()> {
+        Err(DatenLordError::Unimplemented {
+            context: vec!["dist_rw_unlock is not implemented for default metadata".to_owned()],
+        })
+    }
+
+    async fn open_helper(
+        &self,
+        req: &Request<'_>,
+        flags: u32,
+        reply: ReplyOpen,
+    ) -> nix::Result<usize> {
+        let ino = req.nodeid();
+        debug!("open(ino={}, flags={}, req={:?})", ino, flags, req);
+        let opened_files_wlock = self.opened_files.write().await;
+        let dup_res: DatenLordResult<RawFd> = if let Some(fnode) = opened_files_wlock.get(&ino) {
+            let o_flags = fs_util::parse_oflag(flags);
+            // file already opened once, we don't need to hold a dist lock
+            // we need to increase the ref count
+            fnode.inc_open_count();
+            // alloc a new file handle
+            fnode.dup_fd(o_flags).await.add_context(format!(
+                "open() failed to duplicate the file handler of ino={} and name={:?}",
+                ino,
+                fnode.get_name(),
+            ))
+        } else {
+            //get node info and init node from kv by inum
+            let node = self.cache().read().await.get(&ino).unwrap_or_else(|| {
+                panic!(
+                    "open() found fs is inconsistent, \
+                     the inode ino={} is not in cache",
+                    ino
+                );
+            });
+
+            let o_flags = fs_util::parse_oflag(flags);
+            if o_flags.contains(OFlag::O_RDWR)
+                || o_flags.contains(OFlag::O_WRONLY)
+                || o_flags.contains(OFlag::O_APPEND)
+            {
+                // holds a dist write lock
+                if self
+                    .metadata
+                    .dist_rw_try_lock(node.get_full_path(), DistRwLockType::WLock)
+                    .await?
+                {
+                } else {
+                    // return busy
+                    Err(DatenLordError::NixErr {
+                        source: nix::Errno::EBUSY,
+                        context: vec![],
+                    })
+                }
+            } else {
+                // holds a dist read lock
+                if self
+                    .metadata
+                    .dist_rw_try_lock(node.get_full_path(), DistRwLockType::WLock)
+                    .await?
+                {
+                } else {
+                    Err(DatenLordError::NixErr {
+                        source: nix::Errno::EBUSY,
+                        context: vec![],
+                    })
+                }
+            }
+        };
+
+        // TODO: handle open flags
+        // <https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html>
+        // let open_res = if let SFlag::S_IFLNK = node.get_type() {
+        //     node.open_symlink_target(o_flags).await.add_context(format!(
+        //         "open() failed to open symlink target={:?} with flags={}",
+        //         node.get_symlink_target(),
+        //         flags,
+        //     ))
+        // } else {
+
+        match dup_res {
+            Ok(new_fd) => {
+                debug!(
+                    "open() successfully duplicated the file handler of ino={} and name={:?}, fd={}, flags={:?}",
+                    ino, node.get_name(), new_fd, flags,
+                );
+                reply.opened(new_fd, flags).await
+            }
+            Err(e) => {
+                debug!("open() failed, the error is: {}", e);
+                reply.error(e).await
+            }
+        }
     }
 }
 

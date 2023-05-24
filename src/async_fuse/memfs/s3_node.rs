@@ -67,7 +67,7 @@ impl S3NodeData {
 }
 
 /// A file node or a directory node
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct S3Node<S: S3BackEnd + Sync + Send + 'static> {
     /// S3 Backend
     s3_backend: Arc<S>,

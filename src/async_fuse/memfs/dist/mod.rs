@@ -4,6 +4,7 @@ pub mod client;
 pub mod etcd;
 pub mod request;
 pub mod response;
+pub mod rwlock;
 pub mod server;
 /// Tcp communication module
 mod tcp;

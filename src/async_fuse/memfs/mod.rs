@@ -45,6 +45,7 @@ use crate::async_fuse::fuse::fuse_reply::{
 };
 use crate::async_fuse::fuse::fuse_request::Request;
 use crate::async_fuse::fuse::protocol::{INum, FUSE_ROOT_ID};
+use crate::common::dist_rwlock::DistRwLockType;
 use crate::common::error::{Context, DatenLordResult};
 use crate::common::etcd_delegate::EtcdDelegate;
 use cache::IoMemBlock;
@@ -272,41 +273,7 @@ impl<M: MetaData + Send + Sync + 'static> FileSystem for MemFs<M> {
     /// filesystem may set, to change the way the file is opened. See `fuse_file_info`
     /// structure in `fuse_common.h` for more details.
     async fn open(&self, req: &Request<'_>, flags: u32, reply: ReplyOpen) -> nix::Result<usize> {
-        let ino = req.nodeid();
-        debug!("open(ino={}, flags={}, req={:?})", ino, flags, req);
-
-        let cache = self.metadata.cache().read().await;
-        let node = cache.get(&ino).unwrap_or_else(|| {
-            panic!("open() found fs is inconsistent, the i-node of ino={ino} should be in cache",);
-        });
-        let o_flags = fs_util::parse_oflag(flags);
-        // TODO: handle open flags
-        // <https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html>
-        // let open_res = if let SFlag::S_IFLNK = node.get_type() {
-        //     node.open_symlink_target(o_flags).await.add_context(format!(
-        //         "open() failed to open symlink target={:?} with flags={}",
-        //         node.get_symlink_target(),
-        //         flags,
-        //     ))
-        // } else {
-        let dup_res: DatenLordResult<RawFd> = node.dup_fd(o_flags).await.add_context(format!(
-            "open() failed to duplicate the file handler of ino={} and name={:?}",
-            ino,
-            node.get_name(),
-        ));
-        match dup_res {
-            Ok(new_fd) => {
-                debug!(
-                    "open() successfully duplicated the file handler of ino={} and name={:?}, fd={}, flags={:?}",
-                    ino, node.get_name(), new_fd, flags,
-                );
-                reply.opened(new_fd, flags).await
-            }
-            Err(e) => {
-                debug!("open() failed, the error is: {}", e);
-                reply.error(e).await
-            }
-        }
+        self.metadata.open_helper(req, flags, reply).await
     }
 
     /// Forget about an inode.
